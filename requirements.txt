@@ -1,0 +1,18 @@
+# Core dependencies
+fastapi==0.104.1
+uvicorn==0.24.0
+python-multipart==0.0.6
+
+# Image processing
+pillow==10.1.0
+numpy==1.26.2
+
+# YOLO for vehicle detection
+ultralytics==8.0.227
+opencv-python-headless==4.8.1.78
+
+# Geometry for point-in-polygon
+shapely==2.0.2
+
+# HTTP requests (for fetching images)
+httpx==0.25.2

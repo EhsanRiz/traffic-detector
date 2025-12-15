@@ -1,0 +1,12 @@
+# render.yaml - Deploy traffic detection service on Render
+
+services:
+  - type: web
+    name: traffic-detector
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"

@@ -1,0 +1,312 @@
+"""
+Vehicle Detection and Lane Assignment Module
+
+This module uses YOLOv8 for vehicle detection and geometric lane assignment
+to deterministically identify traffic direction on Maseru Bridge.
+
+Direction is NEVER inferred by language - it's computed from geometry.
+"""
+
+import json
+import numpy as np
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass
+from shapely.geometry import Point, Polygon
+from ultralytics import YOLO
+import cv2
+from PIL import Image
+import io
+import base64
+
+
+@dataclass
+class DetectedVehicle:
+    """Represents a detected vehicle with its properties."""
+    bbox: Tuple[int, int, int, int]  # x1, y1, x2, y2
+    center: Tuple[int, int]  # cx, cy
+    confidence: float
+    class_id: int
+    class_name: str
+    assigned_lane: Optional[str] = None
+
+
+@dataclass
+class LaneCount:
+    """Traffic count results for a single analysis."""
+    SA_to_LS: int = 0
+    LS_to_SA: int = 0
+    unassigned: int = 0
+    total: int = 0
+    direction_uncertain: bool = False
+    vehicles: List[Dict] = None
+    
+    def to_dict(self) -> Dict:
+        return {
+            "SA_to_LS": self.SA_to_LS,
+            "LS_to_SA": self.LS_to_SA,
+            "unassigned": self.unassigned,
+            "total": self.total,
+            "direction_uncertain": self.direction_uncertain,
+            "vehicles": self.vehicles or []
+        }
+
+
+class LaneDetector:
+    """
+    Deterministic lane-based vehicle detection and direction assignment.
+    
+    Direction is computed using point-in-polygon geometry, NOT language inference.
+    """
+    
+    def __init__(self, config_path: str = "lane_config.json"):
+        """Initialize the detector with lane configuration."""
+        self.config_path = Path(config_path)
+        self.config = self._load_config()
+        self.model = None
+        self._load_model()
+        
+    def _load_config(self) -> Dict:
+        """Load lane configuration from JSON file."""
+        if self.config_path.exists():
+            with open(self.config_path, 'r') as f:
+                return json.load(f)
+        else:
+            raise FileNotFoundError(f"Lane config not found: {self.config_path}")
+    
+    def _load_model(self):
+        """Load YOLOv8 model for vehicle detection."""
+        try:
+            # Use YOLOv8n (nano) for speed, or YOLOv8s/m for better accuracy
+            self.model = YOLO('yolov8n.pt')
+            print("✅ YOLOv8 model loaded successfully")
+        except Exception as e:
+            print(f"❌ Failed to load YOLO model: {e}")
+            raise
+    
+    def _get_lane_polygons(self, camera_view: str) -> Dict[str, Polygon]:
+        """Get Shapely polygon objects for the specified camera view."""
+        if camera_view not in self.config["camera_views"]:
+            raise ValueError(f"Unknown camera view: {camera_view}")
+        
+        view_config = self.config["camera_views"][camera_view]
+        polygons = {}
+        
+        for lane_name, lane_data in view_config.get("lanes", {}).items():
+            coords = lane_data["polygon"]
+            polygons[lane_name] = Polygon(coords)
+        
+        return polygons
+    
+    def _assign_lane(self, center: Tuple[int, int], polygons: Dict[str, Polygon]) -> Optional[str]:
+        """
+        Assign a vehicle to a lane using point-in-polygon geometry.
+        
+        This is the ONLY place direction is determined - through geometry, not language.
+        """
+        point = Point(center)
+        
+        for lane_name, polygon in polygons.items():
+            if polygon.contains(point):
+                return lane_name
+        
+        return None  # Vehicle not in any defined lane
+    
+    def _decode_image(self, image_data: str) -> np.ndarray:
+        """Decode base64 image to numpy array."""
+        # Remove data URL prefix if present
+        if ',' in image_data:
+            image_data = image_data.split(',')[1]
+        
+        image_bytes = base64.b64decode(image_data)
+        image = Image.open(io.BytesIO(image_bytes))
+        
+        # Convert to RGB if necessary
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        return np.array(image)
+    
+    def detect_vehicles(self, image: np.ndarray) -> List[DetectedVehicle]:
+        """
+        Detect vehicles in the image using YOLOv8.
+        
+        Returns list of DetectedVehicle objects with bounding boxes and centers.
+        """
+        settings = self.config["detection_settings"]
+        vehicle_classes = settings["vehicle_classes"]
+        confidence_threshold = settings["confidence_threshold"]
+        min_size = settings.get("min_vehicle_size", 30)
+        class_names = settings["class_names"]
+        
+        # Run YOLO detection
+        results = self.model(image, verbose=False)[0]
+        
+        vehicles = []
+        for box in results.boxes:
+            class_id = int(box.cls[0])
+            confidence = float(box.conf[0])
+            
+            # Filter by vehicle classes and confidence
+            if class_id not in vehicle_classes:
+                continue
+            if confidence < confidence_threshold:
+                continue
+            
+            # Get bounding box
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            
+            # Filter by minimum size
+            width = x2 - x1
+            height = y2 - y1
+            if width < min_size or height < min_size:
+                continue
+            
+            # Calculate center point
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+            
+            vehicles.append(DetectedVehicle(
+                bbox=(x1, y1, x2, y2),
+                center=(cx, cy),
+                confidence=confidence,
+                class_id=class_id,
+                class_name=class_names.get(str(class_id), "vehicle")
+            ))
+        
+        return vehicles
+    
+    def analyze_traffic(self, image_data: str, camera_view: str = "bridge") -> LaneCount:
+        """
+        Main analysis function - detects vehicles and assigns to lanes.
+        
+        Args:
+            image_data: Base64 encoded image
+            camera_view: Which camera view ("bridge", "canopy", "engen")
+        
+        Returns:
+            LaneCount with deterministic direction counts
+        """
+        # Decode image
+        image = self._decode_image(image_data)
+        
+        # Get lane polygons for this view
+        polygons = self._get_lane_polygons(camera_view)
+        
+        # Detect vehicles
+        vehicles = self.detect_vehicles(image)
+        
+        # Assign each vehicle to a lane using geometry
+        result = LaneCount(vehicles=[])
+        
+        for vehicle in vehicles:
+            lane = self._assign_lane(vehicle.center, polygons)
+            vehicle.assigned_lane = lane
+            
+            # Count by lane
+            if lane == "SA_to_LS":
+                result.SA_to_LS += 1
+            elif lane == "LS_to_SA":
+                result.LS_to_SA += 1
+            else:
+                result.unassigned += 1
+            
+            # Add to vehicle list
+            result.vehicles.append({
+                "bbox": vehicle.bbox,
+                "center": vehicle.center,
+                "confidence": round(vehicle.confidence, 3),
+                "class": vehicle.class_name,
+                "lane": lane
+            })
+        
+        result.total = len(vehicles)
+        
+        # Safety guard: if too many unassigned, flag as uncertain
+        unassigned_threshold = self.config["detection_settings"]["unassigned_threshold"]
+        if result.total > 0:
+            unassigned_ratio = result.unassigned / result.total
+            if unassigned_ratio > unassigned_threshold:
+                result.direction_uncertain = True
+        
+        return result
+    
+    def draw_debug_image(self, image_data: str, camera_view: str = "bridge") -> str:
+        """
+        Create a debug image showing lane polygons and detected vehicles.
+        Useful for calibration.
+        
+        Returns base64 encoded annotated image.
+        """
+        image = self._decode_image(image_data)
+        polygons = self._get_lane_polygons(camera_view)
+        view_config = self.config["camera_views"][camera_view]
+        
+        # Draw lane polygons
+        for lane_name, lane_data in view_config.get("lanes", {}).items():
+            coords = np.array(lane_data["polygon"], np.int32)
+            color = tuple(lane_data.get("color", [255, 255, 0]))
+            cv2.polylines(image, [coords], True, color, 2)
+            
+            # Add label
+            centroid = coords.mean(axis=0).astype(int)
+            cv2.putText(image, lane_name, tuple(centroid), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        
+        # Detect and draw vehicles
+        vehicles = self.detect_vehicles(image)
+        
+        for vehicle in vehicles:
+            lane = self._assign_lane(vehicle.center, polygons)
+            x1, y1, x2, y2 = vehicle.bbox
+            cx, cy = vehicle.center
+            
+            # Color based on lane assignment
+            if lane == "SA_to_LS":
+                color = (0, 255, 0)  # Green
+            elif lane == "LS_to_SA":
+                color = (0, 0, 255)  # Red (BGR)
+            else:
+                color = (0, 255, 255)  # Yellow for unassigned
+            
+            # Draw bounding box
+            cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
+            
+            # Draw center point
+            cv2.circle(image, (cx, cy), 5, color, -1)
+            
+            # Label
+            label = f"{vehicle.class_name} ({lane or 'unassigned'})"
+            cv2.putText(image, label, (x1, y1 - 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        # Encode back to base64
+        _, buffer = cv2.imencode('.jpg', cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+        return base64.b64encode(buffer).decode('utf-8')
+    
+    def update_lane_polygon(self, camera_view: str, lane_name: str, polygon: List[List[int]]):
+        """Update a lane polygon in the configuration."""
+        if camera_view not in self.config["camera_views"]:
+            raise ValueError(f"Unknown camera view: {camera_view}")
+        
+        if lane_name not in self.config["camera_views"][camera_view]["lanes"]:
+            raise ValueError(f"Unknown lane: {lane_name}")
+        
+        self.config["camera_views"][camera_view]["lanes"][lane_name]["polygon"] = polygon
+        
+        # Save updated config
+        with open(self.config_path, 'w') as f:
+            json.dump(self.config, f, indent=2)
+        
+        return True
+
+
+# Singleton instance
+_detector = None
+
+def get_detector() -> LaneDetector:
+    """Get or create the singleton detector instance."""
+    global _detector
+    if _detector is None:
+        _detector = LaneDetector()
+    return _detector

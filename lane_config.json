@@ -1,0 +1,88 @@
+{
+  "camera_views": {
+    "bridge": {
+      "description": "Bridge view with orange pole on right side",
+      "image_width": 1280,
+      "image_height": 720,
+      "lanes": {
+        "SA_to_LS": {
+          "description": "Lane next to orange pole (right side of image) - vehicles coming FROM South Africa",
+          "polygon": [
+            [640, 200],
+            [900, 200],
+            [1100, 600],
+            [700, 600]
+          ],
+          "color": [0, 255, 0]
+        },
+        "LS_to_SA": {
+          "description": "Lane away from orange pole (left side of image) - vehicles going TO South Africa",
+          "polygon": [
+            [300, 200],
+            [600, 200],
+            [650, 600],
+            [200, 600]
+          ],
+          "color": [255, 0, 0]
+        }
+      },
+      "notes": "Polygons are approximate - calibrate using /calibrate endpoint"
+    },
+    "canopy": {
+      "description": "Canopy/Processing area view",
+      "image_width": 1280,
+      "image_height": 720,
+      "lanes": {
+        "SA_to_LS": {
+          "description": "Left side under green roof - SA vehicles being processed",
+          "polygon": [
+            [50, 200],
+            [500, 200],
+            [500, 650],
+            [50, 650]
+          ],
+          "color": [0, 255, 0]
+        },
+        "LS_to_SA": {
+          "description": "Right side open road - LS vehicles heading to bridge",
+          "polygon": [
+            [550, 200],
+            [1200, 200],
+            [1200, 650],
+            [550, 650]
+          ],
+          "color": [255, 0, 0]
+        }
+      }
+    },
+    "engen": {
+      "description": "Engen/Wide view - shows LS to SA approach",
+      "image_width": 1280,
+      "image_height": 720,
+      "lanes": {
+        "LS_to_SA": {
+          "description": "Main road area - vehicles heading to SA",
+          "polygon": [
+            [100, 300],
+            [1180, 300],
+            [1180, 680],
+            [100, 680]
+          ],
+          "color": [255, 0, 0]
+        }
+      },
+      "notes": "Engen view primarily shows LS→SA traffic only"
+    }
+  },
+  "detection_settings": {
+    "confidence_threshold": 0.4,
+    "vehicle_classes": [2, 5, 7],
+    "class_names": {
+      "2": "car",
+      "5": "bus",
+      "7": "truck"
+    },
+    "unassigned_threshold": 0.25,
+    "min_vehicle_size": 30
+  }
+}
