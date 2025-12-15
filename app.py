@@ -213,19 +213,19 @@ async def debug_detection(request: DebugRequest):
     Generate a debug image with lane polygons and detected vehicles visualized.
     
     Useful for calibrating lane polygons.
+    
+    NOTE: Detection runs ONCE and returns both the annotated image AND counts.
     """
     try:
         detector = get_detector()
         
-        # Get counts
-        result = detector.analyze_traffic(request.image, request.camera_view)
-        
-        # Generate annotated image
-        annotated = detector.draw_debug_image(request.image, request.camera_view)
+        # Generate annotated image AND get counts in one call
+        # This ensures the counts match what's drawn on the image
+        annotated_image, result = detector.draw_debug_image(request.image, request.camera_view)
         
         return DebugResponse(
             success=True,
-            annotated_image=annotated,
+            annotated_image=annotated_image,
             counts=result.to_dict()
         )
     except Exception as e:
