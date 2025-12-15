@@ -2,43 +2,54 @@
   "camera_views": {
     "bridge": {
       "description": "Bridge view with orange pole on right side",
-      "image_width": 1280,
-      "image_height": 720,
+      "image_width": 1196,
+      "image_height": 735,
       "lanes": {
         "SA_to_LS": {
           "description": "Lane next to orange pole (right side of image) - vehicles coming FROM South Africa",
           "polygon": [
-            [640, 200],
-            [900, 200],
-            [1100, 600],
-            [700, 600]
+            [819, -20],
+            [700, 5],
+            [610, 109],
+            [550, 272],
+            [526, 471],
+            [499, 644],
+            [641, 589],
+            [749, 450],
+            [839, 271],
+            [873, 87]
           ],
           "color": [0, 255, 0]
         },
         "LS_to_SA": {
           "description": "Lane away from orange pole (left side of image) - vehicles going TO South Africa",
           "polygon": [
-            [300, 200],
-            [600, 200],
-            [650, 600],
-            [200, 600]
+            [612, 35],
+            [490, 59],
+            [372, 135],
+            [257, 285],
+            [187, 433],
+            [224, 542],
+            [349, 525],
+            [474, 410],
+            [578, 254],
+            [618, 134]
           ],
           "color": [255, 0, 0]
         }
-      },
-      "notes": "Polygons are approximate - calibrate using /calibrate endpoint"
+      }
     },
     "canopy": {
       "description": "Canopy/Processing area view",
-      "image_width": 1280,
-      "image_height": 720,
+      "image_width": 1196,
+      "image_height": 735,
       "lanes": {
         "SA_to_LS": {
           "description": "Left side under green roof - SA vehicles being processed",
           "polygon": [
             [50, 200],
-            [500, 200],
-            [500, 650],
+            [450, 200],
+            [450, 650],
             [50, 650]
           ],
           "color": [0, 255, 0]
@@ -46,32 +57,33 @@
         "LS_to_SA": {
           "description": "Right side open road - LS vehicles heading to bridge",
           "polygon": [
-            [550, 200],
-            [1200, 200],
-            [1200, 650],
-            [550, 650]
+            [500, 200],
+            [1100, 200],
+            [1100, 650],
+            [500, 650]
           ],
           "color": [255, 0, 0]
         }
-      }
+      },
+      "notes": "Canopy polygons need calibration with actual camera image"
     },
     "engen": {
       "description": "Engen/Wide view - shows LS to SA approach",
-      "image_width": 1280,
-      "image_height": 720,
+      "image_width": 1196,
+      "image_height": 735,
       "lanes": {
         "LS_to_SA": {
           "description": "Main road area - vehicles heading to SA",
           "polygon": [
             [100, 300],
-            [1180, 300],
-            [1180, 680],
+            [1100, 300],
+            [1100, 680],
             [100, 680]
           ],
           "color": [255, 0, 0]
         }
       },
-      "notes": "Engen view primarily shows LS→SA traffic only"
+      "notes": "Engen view primarily shows LS→SA traffic only. Needs calibration."
     }
   },
   "detection_settings": {
