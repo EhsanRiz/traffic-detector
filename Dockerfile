@@ -20,9 +20,6 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Download YOLO model during build (not at runtime)
-RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
-
 # Copy application code
 COPY . .
 
@@ -30,4 +27,5 @@ COPY . .
 EXPOSE 8000
 
 # Run the application
+# Model will be downloaded on first request
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

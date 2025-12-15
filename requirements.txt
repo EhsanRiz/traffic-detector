@@ -7,8 +7,8 @@ python-multipart==0.0.6
 pillow==10.1.0
 numpy==1.26.2
 
-# YOLO for vehicle detection
-ultralytics==8.0.227
+# YOLO for vehicle detection - use latest for PyTorch compatibility
+ultralytics>=8.3.0
 opencv-python-headless==4.8.1.78
 
 # Geometry for point-in-polygon
