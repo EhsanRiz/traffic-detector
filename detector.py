@@ -84,19 +84,64 @@ class LaneDetector:
             print(f"❌ Failed to load YOLO model: {e}")
             raise
     
-    def _get_lane_polygons(self, camera_view: str) -> Dict[str, Polygon]:
-        """Get Shapely polygon objects for the specified camera view."""
+    def _get_lane_polygons(self, camera_view: str, actual_width: int, actual_height: int) -> Dict[str, Polygon]:
+        """
+        Get Shapely polygon objects for the specified camera view.
+        Scales polygons to match actual image dimensions.
+        """
         if camera_view not in self.config["camera_views"]:
             raise ValueError(f"Unknown camera view: {camera_view}")
         
         view_config = self.config["camera_views"][camera_view]
+        
+        # Get configured dimensions
+        config_width = view_config.get("image_width", 1196)
+        config_height = view_config.get("image_height", 735)
+        
+        # Calculate scale factors
+        scale_x = actual_width / config_width
+        scale_y = actual_height / config_height
+        
         polygons = {}
         
         for lane_name, lane_data in view_config.get("lanes", {}).items():
-            coords = lane_data["polygon"]
-            polygons[lane_name] = Polygon(coords)
+            # Scale each coordinate
+            scaled_coords = [
+                (int(x * scale_x), int(y * scale_y)) 
+                for x, y in lane_data["polygon"]
+            ]
+            polygons[lane_name] = Polygon(scaled_coords)
         
         return polygons
+    
+    def _get_scaled_polygon_coords(self, camera_view: str, actual_width: int, actual_height: int) -> Dict[str, List]:
+        """Get scaled polygon coordinates (for debug drawing)."""
+        if camera_view not in self.config["camera_views"]:
+            raise ValueError(f"Unknown camera view: {camera_view}")
+        
+        view_config = self.config["camera_views"][camera_view]
+        
+        # Get configured dimensions
+        config_width = view_config.get("image_width", 1196)
+        config_height = view_config.get("image_height", 735)
+        
+        # Calculate scale factors
+        scale_x = actual_width / config_width
+        scale_y = actual_height / config_height
+        
+        scaled_polygons = {}
+        
+        for lane_name, lane_data in view_config.get("lanes", {}).items():
+            scaled_coords = [
+                [int(x * scale_x), int(y * scale_y)] 
+                for x, y in lane_data["polygon"]
+            ]
+            scaled_polygons[lane_name] = {
+                "polygon": scaled_coords,
+                "color": lane_data.get("color", [255, 255, 0])
+            }
+        
+        return scaled_polygons
     
     def _assign_lane(self, center: Tuple[int, int], polygons: Dict[str, Polygon]) -> Optional[str]:
         """
@@ -190,8 +235,11 @@ class LaneDetector:
         # Decode image
         image = self._decode_image(image_data)
         
-        # Get lane polygons for this view
-        polygons = self._get_lane_polygons(camera_view)
+        # Get actual image dimensions
+        actual_height, actual_width = image.shape[:2]
+        
+        # Get lane polygons SCALED to actual image size
+        polygons = self._get_lane_polygons(camera_view, actual_width, actual_height)
         
         # Detect vehicles
         vehicles = self.detect_vehicles(image)
@@ -239,11 +287,18 @@ class LaneDetector:
         Returns base64 encoded annotated image.
         """
         image = self._decode_image(image_data)
-        polygons = self._get_lane_polygons(camera_view)
-        view_config = self.config["camera_views"][camera_view]
+        
+        # Get actual image dimensions
+        actual_height, actual_width = image.shape[:2]
+        
+        # Get SCALED polygon coordinates for drawing
+        scaled_polygons = self._get_scaled_polygon_coords(camera_view, actual_width, actual_height)
+        
+        # Get SCALED Shapely polygons for lane assignment
+        polygons = self._get_lane_polygons(camera_view, actual_width, actual_height)
         
         # Draw lane polygons
-        for lane_name, lane_data in view_config.get("lanes", {}).items():
+        for lane_name, lane_data in scaled_polygons.items():
             coords = np.array(lane_data["polygon"], np.int32)
             color = tuple(lane_data.get("color", [255, 255, 0]))
             cv2.polylines(image, [coords], True, color, 2)
