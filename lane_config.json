@@ -8,32 +8,20 @@
         "SA_to_LS": {
           "description": "Lane next to orange pole (right side of image) - vehicles coming FROM South Africa",
           "polygon": [
-            [819, -20],
-            [700, 5],
-            [610, 109],
-            [550, 272],
-            [526, 471],
-            [499, 644],
-            [641, 589],
-            [749, 450],
-            [839, 271],
-            [873, 87]
+            [655, 37],
+            [763, 78],
+            [566, 659],
+            [454, 584]
           ],
           "color": [0, 255, 0]
         },
         "LS_to_SA": {
           "description": "Lane away from orange pole (left side of image) - vehicles going TO South Africa",
           "polygon": [
-            [612, 35],
-            [490, 59],
-            [372, 135],
-            [257, 285],
-            [187, 433],
-            [224, 542],
-            [349, 525],
-            [474, 410],
-            [578, 254],
-            [618, 134]
+            [547, 3],
+            [641, 37],
+            [380, 665],
+            [194, 613]
           ],
           "color": [255, 0, 0]
         }
