@@ -45,6 +45,13 @@ class LaneCount:
     total: int = 0
     direction_uncertain: bool = False
     vehicles: List[Dict] = None
+    # Vehicle type breakdown per lane
+    SA_to_LS_cars: int = 0
+    SA_to_LS_trucks: int = 0
+    SA_to_LS_buses: int = 0
+    LS_to_SA_cars: int = 0
+    LS_to_SA_trucks: int = 0
+    LS_to_SA_buses: int = 0
     
     def to_dict(self) -> Dict:
         return {
@@ -53,7 +60,19 @@ class LaneCount:
             "unassigned": self.unassigned,
             "total": self.total,
             "direction_uncertain": self.direction_uncertain,
-            "vehicles": self.vehicles or []
+            "vehicles": self.vehicles or [],
+            "breakdown": {
+                "SA_to_LS": {
+                    "cars": self.SA_to_LS_cars,
+                    "trucks": self.SA_to_LS_trucks,
+                    "buses": self.SA_to_LS_buses
+                },
+                "LS_to_SA": {
+                    "cars": self.LS_to_SA_cars,
+                    "trucks": self.LS_to_SA_trucks,
+                    "buses": self.LS_to_SA_buses
+                }
+            }
         }
 
 
@@ -313,8 +332,22 @@ class LaneDetector:
             # Count by lane
             if lane == "SA_to_LS":
                 result.SA_to_LS += 1
+                # Count by vehicle type
+                if vehicle.class_name == "car":
+                    result.SA_to_LS_cars += 1
+                elif vehicle.class_name == "truck":
+                    result.SA_to_LS_trucks += 1
+                elif vehicle.class_name == "bus":
+                    result.SA_to_LS_buses += 1
             elif lane == "LS_to_SA":
                 result.LS_to_SA += 1
+                # Count by vehicle type
+                if vehicle.class_name == "car":
+                    result.LS_to_SA_cars += 1
+                elif vehicle.class_name == "truck":
+                    result.LS_to_SA_trucks += 1
+                elif vehicle.class_name == "bus":
+                    result.LS_to_SA_buses += 1
             else:
                 result.unassigned += 1
             
@@ -330,7 +363,7 @@ class LaneDetector:
         result.total = len(vehicles)
         
         logger.info(f"═══════════════════════════════════════")
-        logger.info(f"✅ FINAL RESULT: SA→LS={result.SA_to_LS}, LS→SA={result.LS_to_SA}, unassigned={result.unassigned}, total={result.total}")
+        logger.info(f"✅ FINAL RESULT: SA→LS={result.SA_to_LS} ({result.SA_to_LS_cars}c/{result.SA_to_LS_trucks}t/{result.SA_to_LS_buses}b), LS→SA={result.LS_to_SA} ({result.LS_to_SA_cars}c/{result.LS_to_SA_trucks}t/{result.LS_to_SA_buses}b), unassigned={result.unassigned}, total={result.total}")
         logger.info(f"═══════════════════════════════════════")
         
         # Safety guard: if too many unassigned, flag as uncertain
@@ -380,8 +413,22 @@ class LaneDetector:
             
             if lane == "SA_to_LS":
                 result.SA_to_LS += 1
+                # Count by vehicle type
+                if vehicle.class_name == "car":
+                    result.SA_to_LS_cars += 1
+                elif vehicle.class_name == "truck":
+                    result.SA_to_LS_trucks += 1
+                elif vehicle.class_name == "bus":
+                    result.SA_to_LS_buses += 1
             elif lane == "LS_to_SA":
                 result.LS_to_SA += 1
+                # Count by vehicle type
+                if vehicle.class_name == "car":
+                    result.LS_to_SA_cars += 1
+                elif vehicle.class_name == "truck":
+                    result.LS_to_SA_trucks += 1
+                elif vehicle.class_name == "bus":
+                    result.LS_to_SA_buses += 1
             else:
                 result.unassigned += 1
             
@@ -394,6 +441,8 @@ class LaneDetector:
             })
         
         result.total = len(vehicles)
+        
+        logger.info(f"✅ DEBUG RESULT: SA→LS={result.SA_to_LS} ({result.SA_to_LS_cars}c/{result.SA_to_LS_trucks}t/{result.SA_to_LS_buses}b), LS→SA={result.LS_to_SA} ({result.LS_to_SA_cars}c/{result.LS_to_SA_trucks}t/{result.LS_to_SA_buses}b)")
         
         # NOW draw polygons (after detection)
         for lane_name, lane_data in scaled_polygons.items():
@@ -430,8 +479,6 @@ class LaneDetector:
             label = f"{vehicle.class_name} ({lane or 'unassigned'})"
             cv2.putText(image, label, (x1, y1 - 10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        
-        logger.info(f"✅ DEBUG RESULT: SA→LS={result.SA_to_LS}, LS→SA={result.LS_to_SA}, unassigned={result.unassigned}, total={result.total}")
         
         # Encode back to base64
         _, buffer = cv2.imencode('.jpg', cv2.cvtColor(image, cv2.COLOR_RGB2BGR))

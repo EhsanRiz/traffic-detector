@@ -51,6 +51,7 @@ class AnalyzeResponse(BaseModel):
     direction_uncertain: bool
     message: Optional[str] = None
     vehicles: Optional[List[Dict]] = None
+    breakdown: Optional[Dict] = None
 
 
 class MultiAnalyzeRequest(BaseModel):
@@ -143,7 +144,8 @@ async def analyze_traffic(request: AnalyzeRequest):
             total=result.total,
             direction_uncertain=result.direction_uncertain,
             message=message,
-            vehicles=result.vehicles
+            vehicles=result.vehicles,
+            breakdown=result.to_dict().get("breakdown")
         )
     except Exception as e:
         logger.error(f"Analysis failed: {e}")
