@@ -75,7 +75,7 @@
     }
   },
   "detection_settings": {
-    "confidence_threshold": 0.4,
+    "confidence_threshold": 0.3,
     "vehicle_classes": [2, 5, 7],
     "class_names": {
       "2": "car",
@@ -83,6 +83,6 @@
       "7": "truck"
     },
     "unassigned_threshold": 0.25,
-    "min_vehicle_size": 30
+    "min_vehicle_size": 20
   }
 }
