@@ -28,32 +28,32 @@
       }
     },
     "canopy": {
-      "description": "Canopy/Processing area view",
-      "image_width": 1196,
-      "image_height": 735,
+      "description": "Canopy/Processing area view - shows vehicles queuing and processing",
+      "image_width": 800,
+      "image_height": 450,
       "lanes": {
         "SA_to_LS": {
-          "description": "Left side under green roof - SA vehicles being processed",
+          "description": "Left side under green roof - SA vehicles queuing to enter Lesotho (1-2 rows when busy)",
           "polygon": [
-            [50, 200],
-            [450, 200],
-            [450, 650],
-            [50, 650]
+            [115, 60],
+            [355, 60],
+            [355, 440],
+            [115, 440]
           ],
           "color": [0, 255, 0]
         },
         "LS_to_SA": {
-          "description": "Right side open road - LS vehicles heading to bridge",
+          "description": "Right side area - LS vehicles heading toward bridge/South Africa",
           "polygon": [
-            [500, 200],
-            [1100, 200],
-            [1100, 650],
-            [500, 650]
+            [390, 45],
+            [595, 45],
+            [595, 440],
+            [390, 440]
           ],
           "color": [255, 0, 0]
         }
       },
-      "notes": "Canopy polygons need calibration with actual camera image"
+      "notes": "Trucks in canopy area process elsewhere - they don't cause delays for cars"
     },
     "engen": {
       "description": "Engen/Wide view - shows LS to SA approach",
