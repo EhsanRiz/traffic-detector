@@ -2,26 +2,26 @@
   "camera_views": {
     "bridge": {
       "description": "Bridge view with orange pole on right side",
-      "image_width": 1196,
-      "image_height": 735,
+      "image_width": 800,
+      "image_height": 450,
       "lanes": {
         "SA_to_LS": {
           "description": "Lane next to orange pole (right side of image) - vehicles coming FROM South Africa",
           "polygon": [
-            [665, 37],
-            [793, 78],
-            [596, 659],
-            [464, 584]
+            [655, 37],
+            [763, 78],
+            [566, 659],
+            [454, 584]
           ],
           "color": [0, 255, 0]
         },
         "LS_to_SA": {
           "description": "Lane away from orange pole (left side of image) - vehicles going TO South Africa",
           "polygon": [
-            [577, 3],
-            [691, 37],
-            [430, 665],
-            [224, 613]
+            [547, 3],
+            [641, 37],
+            [380, 665],
+            [194, 613]
           ],
           "color": [255, 0, 0]
         }
@@ -56,26 +56,26 @@
       "notes": "Trucks in canopy area process elsewhere - they don't cause delays for cars"
     },
     "engen": {
-      "description": "Engen/Wide view - shows LS to SA approach",
-      "image_width": 1196,
-      "image_height": 735,
+      "description": "Engen/Wide view - shows approach road from Lesotho side",
+      "image_width": 800,
+      "image_height": 450,
       "lanes": {
         "LS_to_SA": {
-          "description": "Main road area - vehicles heading to SA",
+          "description": "Main road queue area - cars heading to SA (narrow strip following road)",
           "polygon": [
-            [100, 300],
-            [1100, 300],
-            [1100, 680],
-            [100, 680]
+            [300, 100],
+            [520, 140],
+            [680, 320],
+            [480, 270]
           ],
           "color": [255, 0, 0]
         }
       },
-      "notes": "Engen view primarily shows LS→SA traffic only. Needs calibration."
+      "notes": "Engen is used as queue INDICATOR, not for counting. If vehicles detected here = queue stretches past Engen = SEVERE. Excludes truck parking areas."
     }
   },
   "detection_settings": {
-    "confidence_threshold": 0.3,
+    "confidence_threshold": 0.4,
     "vehicle_classes": [2, 5, 7],
     "class_names": {
       "2": "car",
@@ -83,6 +83,6 @@
       "7": "truck"
     },
     "unassigned_threshold": 0.25,
-    "min_vehicle_size": 20
+    "min_vehicle_size": 30
   }
 }
