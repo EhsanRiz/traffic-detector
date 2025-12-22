@@ -35,25 +35,25 @@
         "SA_to_LS": {
           "description": "Left side under green roof - SA vehicles queuing to enter Lesotho (1-2 rows when busy)",
           "polygon": [
-            [115, 60],
-            [355, 60],
-            [355, 440],
-            [115, 440]
+            [80, 50],
+            [300, 50],
+            [300, 440],
+            [80, 440]
           ],
           "color": [0, 255, 0]
         },
         "LS_to_SA": {
-          "description": "Right side area - LS vehicles heading toward bridge/South Africa",
+          "description": "Right side and center area - LS vehicles heading toward bridge/South Africa",
           "polygon": [
-            [390, 45],
-            [595, 45],
-            [595, 440],
-            [390, 440]
+            [300, 40],
+            [650, 40],
+            [650, 440],
+            [300, 440]
           ],
           "color": [255, 0, 0]
         }
       },
-      "notes": "Trucks in canopy area process elsewhere - they don't cause delays for cars"
+      "notes": "Trucks in canopy area process elsewhere - they don't cause delays for cars. LS_to_SA covers center-right where most outbound vehicles queue."
     },
     "engen": {
       "description": "Engen/Wide view - shows approach road from Lesotho side",
