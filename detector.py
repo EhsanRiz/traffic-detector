@@ -25,6 +25,85 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+class StationaryTracker:
+    """
+    Tracks vehicle positions across frames to identify stationary/parked vehicles.
+    A vehicle at the same location for >= N frames is considered parked and excluded
+    from directional counts. This handles the parked truck problem at Maseru Bridge.
+    """
+
+    def __init__(self, iou_threshold: float = 0.6, frames_to_mark_stationary: int = 4):
+        self.iou_threshold = iou_threshold
+        self.frames_to_mark_stationary = frames_to_mark_stationary
+        # Dict: bbox_key -> consecutive_frame_count
+        self._tracked: Dict[str, int] = {}
+        self._stationary: set = set()
+
+    def _bbox_key(self, bbox: Tuple[int, int, int, int]) -> str:
+        """Snap bbox to a coarse grid to handle minor pixel jitter."""
+        x1, y1, x2, y2 = bbox
+        snap = 15  # pixels
+        return f"{x1//snap},{y1//snap},{x2//snap},{y2//snap}"
+
+    def _iou(self, a: Tuple, b: Tuple) -> float:
+        """Compute intersection over union between two bboxes."""
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+        ix1 = max(ax1, bx1); iy1 = max(ay1, by1)
+        ix2 = min(ax2, bx2); iy2 = min(ay2, by2)
+        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+        if inter == 0:
+            return 0.0
+        area_a = (ax2 - ax1) * (ay2 - ay1)
+        area_b = (bx2 - bx1) * (by2 - by1)
+        return inter / (area_a + area_b - inter)
+
+    def update(self, vehicles: List['DetectedVehicle'], camera_view: str) -> List['DetectedVehicle']:
+        """
+        Update tracker with new frame's vehicles.
+        Returns vehicles with stationary ones flagged.
+        Stationary vehicles still appear in the debug image but are excluded from counts.
+        """
+        current_keys = set()
+
+        for v in vehicles:
+            key = self._bbox_key(v.bbox)
+
+            # Check if this vehicle matches any existing tracked bbox via IoU
+            matched_key = None
+            for tracked_key in list(self._tracked.keys()):
+                # Parse tracked bbox from key
+                parts = list(map(int, tracked_key.split(',')))
+                snap = 15
+                approx_bbox = (parts[0]*snap, parts[1]*snap, parts[2]*snap, parts[3]*snap)
+                if self._iou(v.bbox, approx_bbox) >= self.iou_threshold:
+                    matched_key = tracked_key
+                    break
+
+            if matched_key:
+                self._tracked[matched_key] += 1
+                current_keys.add(matched_key)
+                if self._tracked[matched_key] >= self.frames_to_mark_stationary:
+                    self._stationary.add(matched_key)
+                    v.is_stationary = True
+                    logger.info(f"🅿️  PARKED vehicle detected at {v.center} (frame #{self._tracked[matched_key]}) - excluded from counts")
+                else:
+                    v.is_stationary = False
+            else:
+                self._tracked[key] = 1
+                current_keys.add(key)
+                v.is_stationary = False
+
+        # Remove tracked vehicles that disappeared (drove away)
+        gone_keys = set(self._tracked.keys()) - current_keys
+        for k in gone_keys:
+            del self._tracked[k]
+            self._stationary.discard(k)
+            logger.info(f"🚗 Vehicle left the scene (key: {k})")
+
+        return vehicles
+
+
 @dataclass
 class DetectedVehicle:
     """Represents a detected vehicle with its properties."""
@@ -34,6 +113,7 @@ class DetectedVehicle:
     class_id: int
     class_name: str
     assigned_lane: Optional[str] = None
+    is_stationary: bool = False  # True = parked/blocked truck, excluded from counts
 
 
 @dataclass
@@ -89,6 +169,14 @@ class LaneDetector:
         self.config = self._load_config()
         self.model = None
         self._load_model()
+        # Per-view stationary trackers (one per camera angle)
+        self._stationary_trackers: Dict[str, StationaryTracker] = {}
+        for view_name, view_cfg in self.config["camera_views"].items():
+            n_frames = view_cfg.get("stationary_frames_threshold", 4)
+            self._stationary_trackers[view_name] = StationaryTracker(
+                iou_threshold=0.6,
+                frames_to_mark_stationary=n_frames
+            )
         
     def _load_config(self) -> Dict:
         """Load lane configuration from JSON file."""
@@ -170,19 +258,28 @@ class LaneDetector:
         
         return scaled_polygons
     
-    def _assign_lane(self, center: Tuple[int, int], polygons: Dict[str, Polygon]) -> Optional[str]:
+    def _assign_lane(self, center: Tuple[int, int], polygons: Dict[str, Polygon], 
+                     dead_zone_px: int = 0) -> Optional[str]:
         """
         Assign a vehicle to a lane using point-in-polygon geometry.
         
-        This is the ONLY place direction is determined - through geometry, not language.
+        dead_zone_px: if > 0, vehicles whose center is within this many pixels of
+        a polygon boundary are treated as unassigned to avoid wrong-lane errors
+        caused by overtaking near parked trucks.
         """
         point = Point(center)
         
         for lane_name, polygon in polygons.items():
             if polygon.contains(point):
+                # Check if we're too close to the boundary (dead zone)
+                if dead_zone_px > 0:
+                    dist_to_boundary = polygon.exterior.distance(point)
+                    if dist_to_boundary < dead_zone_px:
+                        logger.info(f"   ⚠️  Vehicle at {center} is within {dead_zone_px}px dead zone (dist={dist_to_boundary:.1f}px) → UNASSIGNED")
+                        return None
                 return lane_name
         
-        return None  # Vehicle not in any defined lane
+        return None
     
     def _decode_image(self, image_data: str) -> np.ndarray:
         """Decode base64 image to numpy array."""
@@ -213,15 +310,20 @@ class LaneDetector:
             logger.error(f"❌ Image decode error: {e}")
             raise
     
-    def detect_vehicles(self, image: np.ndarray) -> List[DetectedVehicle]:
+    def detect_vehicles(self, image: np.ndarray, camera_view: str = None) -> List[DetectedVehicle]:
         """
         Detect vehicles in the image using YOLOv8.
-        
-        Returns list of DetectedVehicle objects with bounding boxes and centers.
+        Uses per-view confidence threshold if camera_view is provided.
         """
         settings = self.config["detection_settings"]
         vehicle_classes = settings["vehicle_classes"]
-        confidence_threshold = settings["confidence_threshold"]
+        # Per-view threshold takes priority over global default
+        if camera_view and camera_view in self.config["camera_views"]:
+            confidence_threshold = self.config["camera_views"][camera_view].get(
+                "confidence_threshold", settings["confidence_threshold"]
+            )
+        else:
+            confidence_threshold = settings["confidence_threshold"]
         min_size = settings.get("min_vehicle_size", 30)
         class_names = settings["class_names"]
         
@@ -312,27 +414,48 @@ class LaneDetector:
         
         logger.info(f"📸 Image dimensions: {actual_width}x{actual_height}")
         
+        # Get per-view dead zone
+        view_cfg = self.config["camera_views"].get(camera_view, {})
+        dead_zone_px = view_cfg.get("boundary_dead_zone_px", 0)
+        
         # Get lane polygons SCALED to actual image size
         polygons = self._get_lane_polygons(camera_view, actual_width, actual_height)
         
-        # Detect vehicles
-        vehicles = self.detect_vehicles(image)
+        # Detect vehicles (using per-view confidence threshold)
+        vehicles = self.detect_vehicles(image, camera_view=camera_view)
         
-        logger.info(f"🎯 Assigning {len(vehicles)} vehicles to lanes...")
+        # Update stationary tracker — flags parked/blocked trucks
+        tracker = self._stationary_trackers.get(camera_view)
+        if tracker:
+            vehicles = tracker.update(vehicles, camera_view)
+        
+        logger.info(f"🎯 Assigning {len(vehicles)} vehicles to lanes (dead_zone={dead_zone_px}px)...")
         
         # Assign each vehicle to a lane using geometry
         result = LaneCount(vehicles=[])
         
         for vehicle in vehicles:
-            lane = self._assign_lane(vehicle.center, polygons)
+            lane = self._assign_lane(vehicle.center, polygons, dead_zone_px=dead_zone_px)
             vehicle.assigned_lane = lane
             
-            logger.info(f"   → {vehicle.class_name} at {vehicle.center} → {lane or 'UNASSIGNED'}")
+            logger.info(f"   → {vehicle.class_name} at {vehicle.center} → {lane or 'UNASSIGNED'} {'[PARKED]' if vehicle.is_stationary else ''}")
+            
+            # Skip stationary/parked vehicles from directional counts
+            if vehicle.is_stationary:
+                result.unassigned += 1  # Track them but don't count direction
+                result.vehicles.append({
+                    "bbox": vehicle.bbox,
+                    "center": vehicle.center,
+                    "confidence": round(vehicle.confidence, 3),
+                    "class": vehicle.class_name,
+                    "lane": "PARKED",
+                    "stationary": True
+                })
+                continue
             
             # Count by lane
             if lane == "SA_to_LS":
                 result.SA_to_LS += 1
-                # Count by vehicle type
                 if vehicle.class_name == "car":
                     result.SA_to_LS_cars += 1
                 elif vehicle.class_name == "truck":
@@ -341,7 +464,6 @@ class LaneDetector:
                     result.SA_to_LS_buses += 1
             elif lane == "LS_to_SA":
                 result.LS_to_SA += 1
-                # Count by vehicle type
                 if vehicle.class_name == "car":
                     result.LS_to_SA_cars += 1
                 elif vehicle.class_name == "truck":
@@ -357,7 +479,8 @@ class LaneDetector:
                 "center": vehicle.center,
                 "confidence": round(vehicle.confidence, 3),
                 "class": vehicle.class_name,
-                "lane": lane
+                "lane": lane,
+                "stationary": False
             })
         
         result.total = len(vehicles)
@@ -393,6 +516,10 @@ class LaneDetector:
         # Get actual image dimensions
         actual_height, actual_width = image.shape[:2]
         
+        # Get per-view dead zone
+        view_cfg = self.config["camera_views"].get(camera_view, {})
+        dead_zone_px = view_cfg.get("boundary_dead_zone_px", 0)
+        
         # Get SCALED polygon coordinates for drawing
         scaled_polygons = self._get_scaled_polygon_coords(camera_view, actual_width, actual_height)
         
@@ -400,44 +527,48 @@ class LaneDetector:
         polygons = self._get_lane_polygons(camera_view, actual_width, actual_height)
         
         # IMPORTANT: Detect vehicles FIRST on the CLEAN image (before drawing polygons)
-        vehicles = self.detect_vehicles(image)
+        vehicles = self.detect_vehicles(image, camera_view=camera_view)
+        
+        # Update stationary tracker
+        tracker = self._stationary_trackers.get(camera_view)
+        if tracker:
+            vehicles = tracker.update(vehicles, camera_view)
         
         # Now assign lanes and count
         result = LaneCount(vehicles=[])
         
         for vehicle in vehicles:
-            lane = self._assign_lane(vehicle.center, polygons)
+            lane = self._assign_lane(vehicle.center, polygons, dead_zone_px=dead_zone_px)
             vehicle.assigned_lane = lane
             
-            logger.info(f"   → {vehicle.class_name} at {vehicle.center} → {lane or 'UNASSIGNED'}")
+            logger.info(f"   → {vehicle.class_name} at {vehicle.center} → {lane or 'UNASSIGNED'} {'[PARKED]' if vehicle.is_stationary else ''}")
+            
+            if vehicle.is_stationary:
+                result.unassigned += 1
+                result.vehicles.append({
+                    "bbox": vehicle.bbox, "center": vehicle.center,
+                    "confidence": round(vehicle.confidence, 3),
+                    "class": vehicle.class_name, "lane": "PARKED", "stationary": True
+                })
+                continue
             
             if lane == "SA_to_LS":
                 result.SA_to_LS += 1
-                # Count by vehicle type
-                if vehicle.class_name == "car":
-                    result.SA_to_LS_cars += 1
-                elif vehicle.class_name == "truck":
-                    result.SA_to_LS_trucks += 1
-                elif vehicle.class_name == "bus":
-                    result.SA_to_LS_buses += 1
+                if vehicle.class_name == "car": result.SA_to_LS_cars += 1
+                elif vehicle.class_name == "truck": result.SA_to_LS_trucks += 1
+                elif vehicle.class_name == "bus": result.SA_to_LS_buses += 1
             elif lane == "LS_to_SA":
                 result.LS_to_SA += 1
-                # Count by vehicle type
-                if vehicle.class_name == "car":
-                    result.LS_to_SA_cars += 1
-                elif vehicle.class_name == "truck":
-                    result.LS_to_SA_trucks += 1
-                elif vehicle.class_name == "bus":
-                    result.LS_to_SA_buses += 1
+                if vehicle.class_name == "car": result.LS_to_SA_cars += 1
+                elif vehicle.class_name == "truck": result.LS_to_SA_trucks += 1
+                elif vehicle.class_name == "bus": result.LS_to_SA_buses += 1
             else:
                 result.unassigned += 1
             
             result.vehicles.append({
-                "bbox": vehicle.bbox,
-                "center": vehicle.center,
+                "bbox": vehicle.bbox, "center": vehicle.center,
                 "confidence": round(vehicle.confidence, 3),
-                "class": vehicle.class_name,
-                "lane": lane
+                "class": vehicle.class_name, "lane": lane, "stationary": False
             })
         
         result.total = len(vehicles)
@@ -462,7 +593,9 @@ class LaneDetector:
             lane = vehicle.assigned_lane
             
             # Color based on lane assignment
-            if lane == "SA_to_LS":
+            if vehicle.is_stationary:
+                color = (0, 165, 255)  # Orange for parked/stationary
+            elif lane == "SA_to_LS":
                 color = (0, 255, 0)  # Green
             elif lane == "LS_to_SA":
                 color = (0, 0, 255)  # Red (BGR)
@@ -476,7 +609,10 @@ class LaneDetector:
             cv2.circle(image, (cx, cy), 5, color, -1)
             
             # Label
-            label = f"{vehicle.class_name} ({lane or 'unassigned'})"
+            if vehicle.is_stationary:
+                label = f"{vehicle.class_name} (PARKED)"
+            else:
+                label = f"{vehicle.class_name} ({lane or 'unassigned'})"
             cv2.putText(image, label, (x1, y1 - 10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
