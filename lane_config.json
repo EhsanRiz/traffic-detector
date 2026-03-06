@@ -74,19 +74,19 @@
           "description": "Left side under green roof - SA vehicles queuing to enter Lesotho (1-2 rows when busy)",
           "polygon": [
             [
-              80,
+              300,
               40
             ],
             [
-              370,
+              570,
               40
             ],
             [
-              370,
+              570,
               440
             ],
             [
-              80,
+              300,
               440
             ]
           ],
@@ -100,19 +100,19 @@
           "description": "Right side and center area - LS vehicles heading toward bridge/South Africa",
           "polygon": [
             [
-              370,
+              570,
               40
             ],
             [
-              720,
+              760,
               40
             ],
             [
-              720,
+              760,
               440
             ],
             [
-              370,
+              570,
               440
             ]
           ],
