@@ -12,6 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 import logging
+import os
+import json
+import urllib.request
 
 from detector import get_detector, LaneCount
 
@@ -25,6 +28,31 @@ app = FastAPI(
     description="Deterministic vehicle detection and lane assignment for Maseru Bridge",
     version="1.0.0"
 )
+
+
+@app.on_event("startup")
+async def load_remote_config():
+    """
+    On startup, fetch lane_config.json from LANE_CONFIG_URL (R2) if set.
+    This allows polygon updates without Docker rebuilds — just upload to R2.
+    Falls back to bundled lane_config.json if URL is not set or fetch fails.
+    """
+    config_url = os.environ.get("LANE_CONFIG_URL")
+    if not config_url:
+        logger.info("ℹ️  LANE_CONFIG_URL not set — using bundled lane_config.json")
+        return
+
+    try:
+        logger.info(f"🌐 Fetching lane config from: {config_url}")
+        with urllib.request.urlopen(config_url, timeout=10) as response:
+            remote_config = json.loads(response.read().decode())
+
+        with open("lane_config.json", "w") as f:
+            json.dump(remote_config, f, indent=2)
+
+        logger.info("✅ Remote lane_config.json loaded and saved successfully")
+    except Exception as e:
+        logger.warning(f"⚠️  Failed to fetch remote config: {e} — using bundled lane_config.json")
 
 # Enable CORS for Node.js server
 app.add_middleware(
