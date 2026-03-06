@@ -12,20 +12,20 @@
           "description": "Lane next to orange pole (right side of image) - vehicles coming FROM South Africa",
           "polygon": [
             [
-              620,
-              10
+              690,
+              0
             ],
             [
               800,
-              40
+              0
             ],
             [
               800,
-              447
+              450
             ],
             [
-              480,
-              420
+              530,
+              450
             ]
           ],
           "color": [
@@ -38,20 +38,20 @@
           "description": "Lane away from orange pole (left side of image) - vehicles going TO South Africa",
           "polygon": [
             [
-              430,
+              530,
               0
             ],
             [
-              620,
-              10
+              690,
+              0
             ],
             [
-              480,
+              530,
+              450
+            ],
+            [
+              370,
               420
-            ],
-            [
-              280,
-              360
             ]
           ],
           "color": [
