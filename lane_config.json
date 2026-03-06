@@ -78,11 +78,11 @@
               40
             ],
             [
-              310,
+              370,
               40
             ],
             [
-              310,
+              370,
               440
             ],
             [
@@ -100,19 +100,19 @@
           "description": "Right side and center area - LS vehicles heading toward bridge/South Africa",
           "polygon": [
             [
-              310,
+              370,
               40
             ],
             [
-              700,
+              720,
               40
             ],
             [
-              700,
+              720,
               440
             ],
             [
-              310,
+              370,
               440
             ]
           ],
