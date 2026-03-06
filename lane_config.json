@@ -11,22 +11,54 @@
         "SA_to_LS": {
           "description": "Lane next to orange pole (right side of image) - vehicles coming FROM South Africa",
           "polygon": [
-            [440, 20],
-            [620, 60],
-            [580, 447],
-            [320, 410]
+            [
+              620,
+              10
+            ],
+            [
+              800,
+              40
+            ],
+            [
+              800,
+              447
+            ],
+            [
+              480,
+              420
+            ]
           ],
-          "color": [0, 255, 0]
+          "color": [
+            0,
+            255,
+            0
+          ]
         },
         "LS_to_SA": {
           "description": "Lane away from orange pole (left side of image) - vehicles going TO South Africa",
           "polygon": [
-            [350, 0],
-            [440, 25],
-            [310, 420],
-            [170, 340]
+            [
+              430,
+              0
+            ],
+            [
+              620,
+              10
+            ],
+            [
+              480,
+              420
+            ],
+            [
+              280,
+              360
+            ]
           ],
-          "color": [255, 0, 0]
+          "color": [
+            255,
+            0,
+            0
+          ]
         }
       }
     },
@@ -41,22 +73,54 @@
         "SA_to_LS": {
           "description": "Left side under green roof - SA vehicles queuing to enter Lesotho (1-2 rows when busy)",
           "polygon": [
-            [80, 50],
-            [300, 50],
-            [300, 440],
-            [80, 440]
+            [
+              80,
+              50
+            ],
+            [
+              300,
+              50
+            ],
+            [
+              300,
+              440
+            ],
+            [
+              80,
+              440
+            ]
           ],
-          "color": [0, 255, 0]
+          "color": [
+            0,
+            255,
+            0
+          ]
         },
         "LS_to_SA": {
           "description": "Right side and center area - LS vehicles heading toward bridge/South Africa",
           "polygon": [
-            [300, 40],
-            [650, 40],
-            [650, 440],
-            [300, 440]
+            [
+              300,
+              40
+            ],
+            [
+              650,
+              40
+            ],
+            [
+              650,
+              440
+            ],
+            [
+              300,
+              440
+            ]
           ],
-          "color": [255, 0, 0]
+          "color": [
+            255,
+            0,
+            0
+          ]
         }
       },
       "notes": "Trucks in canopy area process elsewhere - they don't cause delays for cars. LS_to_SA covers center-right where most outbound vehicles queue."
@@ -72,12 +136,28 @@
         "LS_to_SA": {
           "description": "Main road queue area - cars heading to SA (narrow strip following road)",
           "polygon": [
-            [300, 100],
-            [520, 140],
-            [680, 320],
-            [480, 270]
+            [
+              300,
+              100
+            ],
+            [
+              520,
+              140
+            ],
+            [
+              680,
+              320
+            ],
+            [
+              480,
+              270
+            ]
           ],
-          "color": [255, 0, 0]
+          "color": [
+            255,
+            0,
+            0
+          ]
         }
       },
       "notes": "Engen is used as queue INDICATOR, not for counting. If vehicles detected here = queue stretches past Engen = SEVERE. Excludes truck parking areas."
@@ -85,7 +165,11 @@
   },
   "detection_settings": {
     "confidence_threshold": 0.4,
-    "vehicle_classes": [2, 5, 7],
+    "vehicle_classes": [
+      2,
+      5,
+      7
+    ],
     "class_names": {
       "2": "car",
       "5": "bus",
