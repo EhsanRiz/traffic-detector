@@ -4,7 +4,8 @@
       "description": "Bridge view with orange pole on right side",
       "image_width": 800,
       "image_height": 450,
-      "confidence_threshold": 0.3,
+      "confidence_threshold": 0.20,
+      "min_vehicle_size": 15,
       "boundary_dead_zone_px": 25,
       "stationary_frames_threshold": 4,
       "flow_axis": {
@@ -92,7 +93,8 @@
       "description": "Canopy/Processing area view - shows vehicles queuing and processing",
       "image_width": 800,
       "image_height": 450,
-      "confidence_threshold": 0.35,
+      "confidence_threshold": 0.25,
+      "min_vehicle_size": 18,
       "boundary_dead_zone_px": 30,
       "stationary_frames_threshold": 4,
       "flow_axis": {
