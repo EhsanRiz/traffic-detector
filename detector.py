@@ -367,9 +367,13 @@ class VelocityTracker:
                         elapsed = t.last_seen_ts - t.first_seen_ts
                         t.finished_at_ts = t.last_seen_ts
                         t.elapsed_seconds = elapsed
-                        self._completed[t.entry_direction].append(
-                            (t.last_seen_ts, elapsed)
-                        )
+                        self._completed[t.entry_direction].append({
+                            "track_id": t.track_id,
+                            "first_seen_ts": t.first_seen_ts,
+                            "finished_at_ts": t.last_seen_ts,
+                            "elapsed_seconds": elapsed,
+                            "class_name": t.class_name,
+                        })
                         logger.info(
                             f"⏱  MEASURED transit: {t.entry_direction} track #{t.track_id} = {elapsed:.1f}s "
                             f"(buffer now {len(self._completed[t.entry_direction])})"
@@ -393,16 +397,27 @@ class VelocityTracker:
         if not buf:
             return None
         now = time.time()
-        recent = [el for (ts, el) in buf if now - ts <= window_seconds]
-        if len(recent) < min_samples:
+        elapsed_list = [e["elapsed_seconds"] for e in buf
+                        if now - e["finished_at_ts"] <= window_seconds]
+        if len(elapsed_list) < min_samples:
             return None
-        recent.sort()
-        n = len(recent)
-        # Trim top/bottom 10% (at least 1 if n >= 10).
+        elapsed_list.sort()
+        n = len(elapsed_list)
         trim = max(0, n // 10)
-        trimmed = recent[trim: n - trim] if trim > 0 else recent
+        trimmed = elapsed_list[trim: n - trim] if trim > 0 else elapsed_list
         mean = sum(trimmed) / len(trimmed)
         return mean, n
+
+    def get_recent_transits(self, direction: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Returns the most recent completed transit records for a direction.
+        Newest last. Used by server.js to FIFO-chain canopy exits with bridge
+        entries (cross-view journey tracking).
+        """
+        buf = self._completed.get(direction)
+        if not buf:
+            return []
+        return list(buf)[-limit:]
 
     def compute_velocity(self, track: Track) -> Tuple[float, float]:
         """Average velocity in px/s from oldest→newest bbox in history."""
@@ -1200,9 +1215,16 @@ class LaneDetector:
         # Measured wait time from tag-in / tag-out tracking. None if too few
         # completed transits in the rolling window.
         ls_observed = sa_observed = None
+        recent_ls: List[Dict[str, Any]] = []
+        recent_sa: List[Dict[str, Any]] = []
         if tracker is not None:
             ls_observed = tracker.get_observed_wait_seconds("LS_to_SA")
             sa_observed = tracker.get_observed_wait_seconds("SA_to_LS")
+            # Raw completed-transit events for cross-view journey chaining.
+            # Server side joins canopy LS->SA finishes with bridge LS->SA
+            # starts (FIFO within the same direction).
+            recent_ls = tracker.get_recent_transits("LS_to_SA", limit=20)
+            recent_sa = tracker.get_recent_transits("SA_to_LS", limit=20)
 
         def _obs(o):
             if not o:
@@ -1222,6 +1244,7 @@ class LaneDetector:
                 "free_flow_transit_seconds": ls_transit_s,
                 "estimated_wait_seconds": ls_wait_s,
                 "observed_wait": _obs(ls_observed),
+                "recent_transits": recent_ls,
             },
             "SA_to_LS": {
                 "moving_count": len(sa_speeds),
@@ -1231,6 +1254,7 @@ class LaneDetector:
                 "free_flow_transit_seconds": sa_transit_s,
                 "estimated_wait_seconds": sa_wait_s,
                 "observed_wait": _obs(sa_observed),
+                "recent_transits": recent_sa,
             },
         }
 
