@@ -331,6 +331,26 @@ async def debug_detection(request: DebugRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/track/{camera_view}/{track_id}")
+async def get_track_state(camera_view: str, track_id: int):
+    """
+    Return the current state of one tracked vehicle. Powers the admin
+    live-follower: a human picks a track_id off the debug overlay and the
+    UI polls this every few seconds to watch the vehicle's progress
+    (entry edge, direction, elapsed, speed) until it crosses an exit zone.
+    """
+    try:
+        detector = get_detector()
+        t = detector.get_track_state(camera_view, track_id)
+        if t is None:
+            return {"success": True, "track": None,
+                    "message": "Track not currently active in this view"}
+        return {"success": True, "track": t}
+    except Exception as e:
+        logger.error(f"track-status failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/calibrate", response_model=CalibrationResponse)
 async def calibrate_lane(request: CalibrationRequest):
     """

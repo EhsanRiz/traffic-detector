@@ -1264,6 +1264,46 @@ class LaneDetector:
             },
         }
 
+    def get_track_state(self, camera_view: str, track_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Returns the current state of one specific tracked vehicle (or None if
+        the tracker has evicted/lost it). Used by the admin live-follower UI
+        so a human can pick a car off the debug image and watch its progress
+        across capture cycles.
+        """
+        tracker = self._velocity_trackers.get(camera_view)
+        if tracker is None:
+            return None
+        t = tracker._tracks.get(int(track_id))
+        if t is None:
+            return None
+        vx, vy = tracker.compute_velocity(t)
+        return {
+            "track_id": t.track_id,
+            "bbox": list(t.bbox),
+            "center": list(t.center),
+            "class_name": t.class_name,
+            "confidence": round(t.confidence, 3),
+            "first_seen_ts": t.first_seen_ts,
+            "last_seen_ts": t.last_seen_ts,
+            "elapsed_so_far_seconds": round(t.last_seen_ts - t.first_seen_ts, 1),
+            "entry_edge": t.entry_edge,
+            "entry_direction": t.entry_direction,
+            "direction": t.direction,
+            "direction_source": t.direction_source,
+            "speed_px_per_sec": round(t.speed_px_per_sec, 2),
+            "speed_along_axis": round(t.speed_along_axis, 2),
+            "velocity_vector": [round(vx, 2), round(vy, 2)],
+            "finished_at_ts": t.finished_at_ts,
+            "elapsed_seconds": t.elapsed_seconds,
+            "is_finished": t.finished_at_ts is not None,
+            # Last 20 positions for drawing a trail in the UI
+            "bbox_history": [
+                {"ts": ts, "bbox": list(bb)}
+                for ts, bb in t.bbox_history[-20:]
+            ],
+        }
+
     def update_lane_polygon(self, camera_view: str, lane_name: str, polygon: List[List[int]]):
         """Update a lane polygon in the configuration."""
         if camera_view not in self.config["camera_views"]:
