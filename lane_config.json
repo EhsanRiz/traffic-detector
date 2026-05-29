@@ -29,6 +29,7 @@
       "motion_threshold_px_per_sec": 5.0,
       "pixels_per_meter": 10.3,
       "segment_length_m": 50.0,
+      "queue_seconds_per_vehicle": 30.0,
       "track_max_age_seconds": 300,
       "lanes": {
         "SA_to_LS": {
@@ -114,6 +115,7 @@
       "motion_threshold_px_per_sec": 3.0,
       "pixels_per_meter": 8.0,
       "segment_length_m": 50.0,
+      "queue_seconds_per_vehicle": 45.0,
       "track_max_age_seconds": 900,
       "lanes": {
         "SA_to_LS": {
@@ -194,6 +196,7 @@
       "motion_threshold_px_per_sec": 4.0,
       "pixels_per_meter": 8.0,
       "segment_length_m": 50.0,
+      "queue_seconds_per_vehicle": 25.0,
       "track_max_age_seconds": 600,
       "lanes": {
         "LS_to_SA": {

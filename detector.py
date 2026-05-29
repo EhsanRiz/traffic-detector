@@ -1069,45 +1069,71 @@ class LaneDetector:
         def avg(xs):
             return (sum(xs) / len(xs)) if xs else 0.0
 
-        ls_mean_px = avg(ls_speeds)  # signed positive for LS→SA
-        # SA→LS speeds project negative onto the axis; use absolute value.
+        ls_mean_px = avg(ls_speeds)
         sa_mean_px = avg([abs(v) for v in sa_speeds])
 
         ls_kmh = sa_kmh = None
         ls_transit_s = sa_transit_s = None
+        view_cfg = self.config["camera_views"].get(camera_view, {})
+        segment_m = float(view_cfg.get("segment_length_m", 50.0))
+        # Per-view processing pace used as the wait-time signal when motion
+        # is zero (queued / stalled). Border bridge ~30s/car, customs ~45s/car.
+        queue_sec_per_vehicle = float(view_cfg.get("queue_seconds_per_vehicle", 30.0))
+
         if pixels_per_meter and pixels_per_meter > 0:
             mps_per_px = 1.0 / pixels_per_meter
             ls_mps = ls_mean_px * mps_per_px
             sa_mps = sa_mean_px * mps_per_px
-            if ls_mps > 0:
-                ls_kmh = round(ls_mps * 3.6, 1)
-            if sa_mps > 0:
-                sa_kmh = round(sa_mps * 3.6, 1)
+            if ls_mps > 0: ls_kmh = round(ls_mps * 3.6, 1)
+            if sa_mps > 0: sa_kmh = round(sa_mps * 3.6, 1)
+            if ls_mps > 0: ls_transit_s = round(segment_m / ls_mps, 1)
+            if sa_mps > 0: sa_transit_s = round(segment_m / sa_mps, 1)
 
-            # Free-flow transit time across the segment whose length the
-            # caller pre-configured under flow_axis. For bridge/canopy/engen
-            # we treat the configured ~50m as the segment length.
-            segment_m = 50.0
-            view_cfg = self.config["camera_views"].get(camera_view, {})
-            segment_m = float(view_cfg.get("segment_length_m", segment_m))
-            if ls_mps > 0:
-                ls_transit_s = round(segment_m / ls_mps, 1)
-            if sa_mps > 0:
-                sa_transit_s = round(segment_m / sa_mps, 1)
+        # Queue length per direction. A track counted here is either:
+        #   - direction_source='entry' (stationary, direction came from the
+        #     entry-edge prior — typical for a queued vehicle), or
+        #   - direction_source='motion' (still moving — included so vehicles
+        #     ahead of you in a slow-moving queue also contribute).
+        # We deliberately exclude 'unassigned' tracks because we can't say
+        # which queue they're part of.
+        ls_total = sum(1 for t in tracks if t.direction == "LS_to_SA")
+        sa_total = sum(1 for t in tracks if t.direction == "SA_to_LS")
+        ls_queued_only = sum(1 for t in tracks
+                             if t.direction == "LS_to_SA" and t.direction_source == "entry")
+        sa_queued_only = sum(1 for t in tracks
+                             if t.direction == "SA_to_LS" and t.direction_source == "entry")
 
-        ls_moving = len(ls_speeds)
-        sa_moving = len(sa_speeds)
+        # Wait-time estimate = queue_clear + free_flow_drive_through.
+        # When everyone is stopped, free_flow component is 0/None and the
+        # estimate is dominated by queue_length * sec_per_vehicle.
+        def estimate_seconds(total_count, transit_s):
+            queue_part = total_count * queue_sec_per_vehicle
+            transit_part = transit_s if transit_s else 0
+            total = queue_part + transit_part
+            return round(total, 1) if total > 0 else None
+
+        ls_wait_s = estimate_seconds(ls_total, ls_transit_s)
+        sa_wait_s = estimate_seconds(sa_total, sa_transit_s)
+
         return {
             "pixels_per_meter": pixels_per_meter,
+            "segment_length_m": segment_m,
+            "queue_seconds_per_vehicle": queue_sec_per_vehicle,
             "LS_to_SA": {
-                "moving_count": ls_moving,
+                "moving_count": len(ls_speeds),
+                "queued_count": ls_queued_only,
+                "total_in_lane": ls_total,
                 "mean_speed_kmh": ls_kmh,
                 "free_flow_transit_seconds": ls_transit_s,
+                "estimated_wait_seconds": ls_wait_s,
             },
             "SA_to_LS": {
-                "moving_count": sa_moving,
+                "moving_count": len(sa_speeds),
+                "queued_count": sa_queued_only,
+                "total_in_lane": sa_total,
                 "mean_speed_kmh": sa_kmh,
                 "free_flow_transit_seconds": sa_transit_s,
+                "estimated_wait_seconds": sa_wait_s,
             },
         }
 
