@@ -607,14 +607,20 @@ class LaneDetector:
         """
         settings = self.config["detection_settings"]
         vehicle_classes = settings["vehicle_classes"]
-        # Per-view threshold takes priority over global default
+        # Per-view threshold + size take priority over global default. Engen
+        # (wide approach view) needs lower thresholds because vehicles are
+        # 15-25 px at that distance vs ~60+ px on bridge / canopy.
         if camera_view and camera_view in self.config["camera_views"]:
-            confidence_threshold = self.config["camera_views"][camera_view].get(
+            view_cfg = self.config["camera_views"][camera_view]
+            confidence_threshold = view_cfg.get(
                 "confidence_threshold", settings["confidence_threshold"]
+            )
+            min_size = view_cfg.get(
+                "min_vehicle_size", settings.get("min_vehicle_size", 30)
             )
         else:
             confidence_threshold = settings["confidence_threshold"]
-        min_size = settings.get("min_vehicle_size", 30)
+            min_size = settings.get("min_vehicle_size", 30)
         class_names = settings["class_names"]
         
         logger.info(f"🚗 Running YOLO detection...")

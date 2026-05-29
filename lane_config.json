@@ -178,12 +178,14 @@
       "notes": "Trucks in canopy area process elsewhere - they don't cause delays for cars. LS_to_SA covers center-right where most outbound vehicles queue."
     },
     "engen": {
-      "description": "Engen/Wide view - shows approach road from Lesotho side",
+      "description": "Engen/Wide approach view — used as a queue-backup INDICATOR, not a per-vehicle transit measurement. Vehicles at this distance are ~15-25px so individual tracking is unreliable; the count is meaningful, individual identity is not.",
       "image_width": 800,
       "image_height": 450,
-      "confidence_threshold": 0.4,
+      "confidence_threshold": 0.20,
+      "min_vehicle_size": 12,
       "boundary_dead_zone_px": 0,
       "stationary_frames_threshold": 4,
+      "use_as_indicator_only": true,
       "flow_axis": {
         "description": "LS->SA approach direction: from far-end of queue (upper-left, deep in Maseru) toward the border (lower-right).",
         "from": [300, 100],
@@ -192,15 +194,9 @@
       "entry_zones": [
         {
           "name": "queue_tail",
-          "description": "Far end of queue — vehicles joining the queue from Maseru.",
+          "description": "Far end of queue — vehicles joining the queue from Maseru. Used as a direction tag only; per-vehicle tracking is unreliable at this distance.",
           "polygon": [[260, 90], [380, 110], [380, 160], [260, 140]],
           "direction": "LS_to_SA"
-        },
-        {
-          "name": "border_exit",
-          "description": "Near end of approach (just before canopy) — exit-only for LS_to_SA travelers.",
-          "polygon": [[600, 280], [720, 320], [720, 360], [600, 320]],
-          "exit_for": "LS_to_SA"
         }
       ],
       "motion_threshold_px_per_sec": 4.0,
