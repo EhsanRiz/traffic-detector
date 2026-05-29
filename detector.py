@@ -8,11 +8,14 @@ Direction is NEVER inferred by language - it's computed from geometry.
 """
 
 import json
+import math
+import time
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
-from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional, Any
+from dataclasses import dataclass, field
 from shapely.geometry import Point, Polygon
+from shapely.ops import unary_union
 from ultralytics import YOLO
 import cv2
 from PIL import Image
@@ -156,6 +159,202 @@ class LaneCount:
         }
 
 
+# =============================================
+# VELOCITY TRACKER (Phase 1)
+# =============================================
+# Tracks each vehicle across consecutive frames so direction can be derived
+# from the actual motion vector (and from where the vehicle entered the scene)
+# instead of from static polygon membership. Lifecycle-based: a track keeps
+# its entry-edge direction prior even while it's sitting stationary in a
+# queue, which fixes the bridge-congestion → canopy-spillover misattribution.
+
+@dataclass
+class Track:
+    """One tracked vehicle across multiple frames."""
+    track_id: int
+    bbox: Tuple[int, int, int, int]
+    center: Tuple[int, int]
+    class_name: str
+    confidence: float
+    first_seen_ts: float                  # seconds since epoch
+    last_seen_ts: float
+    bbox_history: List[Tuple[float, Tuple[int, int, int, int]]] = field(default_factory=list)
+    entry_edge: Optional[str] = None      # zone name where the track first appeared
+    entry_direction: Optional[str] = None # 'LS_to_SA' | 'SA_to_LS' from entry zone
+    direction: Optional[str] = None       # final assignment for the current frame
+    direction_source: str = "unassigned"  # 'motion' | 'entry' | 'unassigned'
+    speed_along_axis: float = 0.0         # signed px/s along the flow axis
+    speed_px_per_sec: float = 0.0         # |velocity| magnitude
+
+
+class VelocityTracker:
+    """
+    Stateful IoU-based tracker. Matches new detections to existing tracks by
+    bbox overlap; tags entry-edge once on first appearance; computes per-track
+    velocity from bbox-history endpoints. State persists across analyze calls
+    (per camera view) so queue continuity survives between capture cycles.
+    """
+
+    def __init__(
+        self,
+        iou_match_threshold: float = 0.2,
+        max_centroid_distance_px: float = 120.0,
+        max_age_seconds: float = 300.0,
+        history_size: int = 8,
+    ):
+        self.iou_threshold = iou_match_threshold
+        # Fallback when IoU < threshold (e.g. fast-moving vehicle whose bbox in
+        # the next frame doesn't overlap with the prior — at 1 Hz burst a car
+        # at 50 km/h moves ~140 px on the bridge, well past any IoU match).
+        self.max_centroid_distance_px = max_centroid_distance_px
+        self.max_age_seconds = max_age_seconds
+        self.history_size = history_size
+        self._tracks: Dict[int, Track] = {}
+        self._next_id: int = 1
+
+    @staticmethod
+    def _iou(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> float:
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+        ix1 = max(ax1, bx1); iy1 = max(ay1, by1)
+        ix2 = min(ax2, bx2); iy2 = min(ay2, by2)
+        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+        if inter == 0:
+            return 0.0
+        area_a = (ax2 - ax1) * (ay2 - ay1)
+        area_b = (bx2 - bx1) * (by2 - by1)
+        return inter / max(1e-6, area_a + area_b - inter)
+
+    def _match(
+        self,
+        detection_bbox: Tuple[int, int, int, int],
+        detection_center: Tuple[int, int],
+        used: set,
+    ) -> Optional[int]:
+        # Pass 1: IoU — preferred when bboxes overlap (slow/queued vehicles).
+        best_iou = self.iou_threshold
+        best_id_iou = None
+        for tid, track in self._tracks.items():
+            if tid in used:
+                continue
+            iou = self._iou(track.bbox, detection_bbox)
+            if iou > best_iou:
+                best_iou = iou
+                best_id_iou = tid
+        if best_id_iou is not None:
+            return best_id_iou
+
+        # Pass 2: nearest centroid within max_centroid_distance_px.
+        # Catches fast-moving vehicles whose bboxes don't overlap between frames.
+        best_dist = self.max_centroid_distance_px
+        best_id_dist = None
+        dcx, dcy = detection_center
+        for tid, track in self._tracks.items():
+            if tid in used:
+                continue
+            tcx, tcy = track.center
+            d = math.hypot(tcx - dcx, tcy - dcy)
+            if d < best_dist:
+                best_dist = d
+                best_id_dist = tid
+        return best_id_dist
+
+    def _evict_stale(self, now_ts: float):
+        stale = [tid for tid, t in self._tracks.items()
+                 if now_ts - t.last_seen_ts > self.max_age_seconds]
+        for tid in stale:
+            del self._tracks[tid]
+
+    def update_frame(
+        self,
+        detections: List["DetectedVehicle"],
+        timestamp_s: float,
+        entry_zones: List[Dict[str, Any]],
+        scene_polygons: List[Polygon],
+    ) -> List[Track]:
+        """
+        Update the tracker with detections from a single frame.
+
+        entry_zones: list of {name, polygon (shapely), direction}
+        scene_polygons: list of Polygon — vehicles whose center is outside ALL
+            of these AND outside all entry zones are treated as off-scene and dropped.
+
+        Returns the list of Track objects matched/created in this frame.
+        """
+        self._evict_stale(timestamp_s)
+
+        used_ids: set = set()
+        active: List[Track] = []
+
+        for det in detections:
+            center_pt = Point(det.center)
+
+            # Off-scene filter: vehicle must be inside a lane polygon or an
+            # entry zone to be tracked at all. Keeps us from chasing cars on
+            # the riverside road, embankment, etc.
+            on_scene = any(p.contains(center_pt) for p in scene_polygons)
+            in_entry = any(z["polygon"].contains(center_pt) for z in entry_zones)
+            if not on_scene and not in_entry:
+                continue
+
+            tid = self._match(det.bbox, det.center, used_ids)
+            if tid is not None:
+                track = self._tracks[tid]
+                track.bbox = det.bbox
+                track.center = det.center
+                track.confidence = det.confidence
+                track.class_name = det.class_name
+                track.last_seen_ts = timestamp_s
+                track.bbox_history.append((timestamp_s, det.bbox))
+                if len(track.bbox_history) > self.history_size:
+                    track.bbox_history = track.bbox_history[-self.history_size:]
+                used_ids.add(tid)
+                active.append(track)
+            else:
+                # New track. Tag entry edge if center is in an entry zone now.
+                entry_edge = None
+                entry_direction = None
+                for zone in entry_zones:
+                    if zone["polygon"].contains(center_pt):
+                        entry_edge = zone["name"]
+                        entry_direction = zone["direction"]
+                        break
+
+                new_id = self._next_id
+                self._next_id += 1
+                new_track = Track(
+                    track_id=new_id,
+                    bbox=det.bbox,
+                    center=det.center,
+                    class_name=det.class_name,
+                    confidence=det.confidence,
+                    first_seen_ts=timestamp_s,
+                    last_seen_ts=timestamp_s,
+                    bbox_history=[(timestamp_s, det.bbox)],
+                    entry_edge=entry_edge,
+                    entry_direction=entry_direction,
+                )
+                self._tracks[new_id] = new_track
+                used_ids.add(new_id)
+                active.append(new_track)
+
+        return active
+
+    def compute_velocity(self, track: Track) -> Tuple[float, float]:
+        """Average velocity in px/s from oldest→newest bbox in history."""
+        hist = track.bbox_history
+        if len(hist) < 2:
+            return (0.0, 0.0)
+        t0, b0 = hist[0]
+        t1, b1 = hist[-1]
+        dt = t1 - t0
+        if dt < 0.05:  # < 50ms, too noisy
+            return (0.0, 0.0)
+        c0 = ((b0[0] + b0[2]) / 2.0, (b0[1] + b0[3]) / 2.0)
+        c1 = ((b1[0] + b1[2]) / 2.0, (b1[1] + b1[3]) / 2.0)
+        return ((c1[0] - c0[0]) / dt, (c1[1] - c0[1]) / dt)
+
+
 class LaneDetector:
     """
     Deterministic lane-based vehicle detection and direction assignment.
@@ -177,7 +376,19 @@ class LaneDetector:
                 iou_threshold=0.6,
                 frames_to_mark_stationary=n_frames
             )
-        
+
+        # Per-view VELOCITY trackers — Phase 1.
+        # Used by analyze_burst(). State persists across calls so a queue
+        # parked through multiple capture cycles keeps its entry-edge
+        # direction prior even when motion drops to zero.
+        self._velocity_trackers: Dict[str, VelocityTracker] = {}
+        for view_name, view_cfg in self.config["camera_views"].items():
+            self._velocity_trackers[view_name] = VelocityTracker(
+                iou_match_threshold=0.3,
+                max_age_seconds=float(view_cfg.get("track_max_age_seconds", 300)),
+                history_size=8,
+            )
+
     def _load_config(self) -> Dict:
         """Load lane configuration from JSON file."""
         if self.config_path.exists():
@@ -619,7 +830,287 @@ class LaneDetector:
         # Encode back to base64
         _, buffer = cv2.imencode('.jpg', cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
         return base64.b64encode(buffer).decode('utf-8'), result
-    
+
+    # =========================================================
+    # PHASE 1 — BURST ANALYSIS WITH MOTION + ENTRY-EDGE DIRECTION
+    # =========================================================
+
+    def _get_view_runtime(
+        self, camera_view: str, actual_width: int, actual_height: int
+    ) -> Dict[str, Any]:
+        """
+        Build per-frame runtime state for a view: scaled flow axis, scaled
+        entry zones, scaled scene mask (union of existing lane polygons),
+        motion threshold, and pixels-per-meter.
+        """
+        if camera_view not in self.config["camera_views"]:
+            raise ValueError(f"Unknown camera view: {camera_view}")
+
+        view = self.config["camera_views"][camera_view]
+        config_width = view.get("image_width", 800)
+        config_height = view.get("image_height", 450)
+        sx = actual_width / config_width
+        sy = actual_height / config_height
+
+        # Flow axis (unit vector pointing LS_to_SA).
+        axis_cfg = view.get("flow_axis")
+        if axis_cfg:
+            f = axis_cfg["from"]; t = axis_cfg["to"]
+            ax = (t[0] - f[0]) * sx
+            ay = (t[1] - f[1]) * sy
+            mag = math.hypot(ax, ay) or 1.0
+            axis_unit = (ax / mag, ay / mag)
+        else:
+            # Default: down the image (works as a no-op when unconfigured).
+            axis_unit = (0.0, 1.0)
+
+        # Entry zones (each {name, polygon (Shapely), direction}).
+        entry_zones: List[Dict[str, Any]] = []
+        for zone in view.get("entry_zones", []):
+            scaled = [(int(x * sx), int(y * sy)) for x, y in zone["polygon"]]
+            entry_zones.append({
+                "name": zone["name"],
+                "polygon": Polygon(scaled),
+                "direction": zone["direction"],
+            })
+
+        # Scene mask = union of all configured lane polygons. Vehicles whose
+        # center is outside this AND outside every entry zone are dropped
+        # (off-scene — riverside road, embankment, etc.).
+        scene_polygons: List[Polygon] = []
+        for lane_data in view.get("lanes", {}).values():
+            scaled = [(int(x * sx), int(y * sy)) for x, y in lane_data["polygon"]]
+            scene_polygons.append(Polygon(scaled))
+
+        return {
+            "axis_unit": axis_unit,
+            "entry_zones": entry_zones,
+            "scene_polygons": scene_polygons,
+            "motion_threshold_px_per_sec": float(
+                view.get("motion_threshold_px_per_sec", 5.0)
+            ),
+            "pixels_per_meter": view.get("pixels_per_meter"),
+        }
+
+    def _assign_direction_to_track(
+        self,
+        track: Track,
+        axis_unit: Tuple[float, float],
+        motion_threshold: float,
+        tracker: VelocityTracker,
+    ) -> None:
+        """
+        Set track.direction using motion projection onto the flow axis when
+        the vehicle is meaningfully moving; otherwise fall back to the entry-
+        edge prior captured when the track was first seen.
+        """
+        vx, vy = tracker.compute_velocity(track)
+        speed_along_axis = vx * axis_unit[0] + vy * axis_unit[1]
+        track.speed_along_axis = speed_along_axis
+        track.speed_px_per_sec = math.hypot(vx, vy)
+
+        if abs(speed_along_axis) >= motion_threshold:
+            track.direction = "LS_to_SA" if speed_along_axis > 0 else "SA_to_LS"
+            track.direction_source = "motion"
+            return
+
+        if track.entry_direction:
+            track.direction = track.entry_direction
+            track.direction_source = "entry"
+            return
+
+        track.direction = None
+        track.direction_source = "unassigned"
+
+    @staticmethod
+    def _add_class_to_breakdown(result: LaneCount, class_name: str, direction: str) -> None:
+        if direction == "LS_to_SA":
+            if class_name == "car":   result.LS_to_SA_cars += 1
+            elif class_name == "truck": result.LS_to_SA_trucks += 1
+            elif class_name == "bus":   result.LS_to_SA_buses += 1
+        elif direction == "SA_to_LS":
+            if class_name == "car":   result.SA_to_LS_cars += 1
+            elif class_name == "truck": result.SA_to_LS_trucks += 1
+            elif class_name == "bus":   result.SA_to_LS_buses += 1
+
+    def analyze_burst(
+        self,
+        frames: List[Dict[str, Any]],
+        camera_view: str = "bridge",
+    ) -> LaneCount:
+        """
+        Analyze a burst of consecutive frames captured ~1s apart.
+
+        frames: list of {'image': base64_str, 'timestamp_ms': int}, oldest first.
+
+        Direction for each tracked vehicle is:
+          1. Sign of motion projected onto the flow axis, if speed >= threshold
+          2. Otherwise the entry-zone prior tagged when the track was created
+          3. Otherwise unassigned
+
+        Tracker state persists per camera_view across calls — a vehicle parked
+        in the same spot across multiple capture cycles keeps its direction.
+        """
+        logger.info("═══════════════════════════════════════")
+        logger.info(f"🔍 ANALYZE BURST - view: {camera_view}, frames: {len(frames)}")
+        logger.info("═══════════════════════════════════════")
+
+        if not frames:
+            return LaneCount(vehicles=[])
+
+        # Decode first frame to learn actual dimensions.
+        first_img = self._decode_image(frames[0]["image"])
+        actual_height, actual_width = first_img.shape[:2]
+
+        runtime = self._get_view_runtime(camera_view, actual_width, actual_height)
+        axis_unit = runtime["axis_unit"]
+        entry_zones = runtime["entry_zones"]
+        scene_polygons = runtime["scene_polygons"]
+        motion_threshold = runtime["motion_threshold_px_per_sec"]
+
+        tracker = self._velocity_trackers.get(camera_view)
+        if tracker is None:
+            # View added at runtime — instantiate lazily.
+            tracker = VelocityTracker(max_age_seconds=300.0)
+            self._velocity_trackers[camera_view] = tracker
+
+        # Walk the burst in order. We hold last_active so we count on the
+        # newest frame; tracker state carries motion history across frames.
+        last_active: List[Track] = []
+        for i, frame_data in enumerate(frames):
+            img = first_img if i == 0 else self._decode_image(frame_data["image"])
+            ts_ms = frame_data.get("timestamp_ms")
+            timestamp_s = (ts_ms / 1000.0) if ts_ms is not None else time.time()
+
+            detections = self.detect_vehicles(img, camera_view=camera_view)
+            last_active = tracker.update_frame(
+                detections=detections,
+                timestamp_s=timestamp_s,
+                entry_zones=entry_zones,
+                scene_polygons=scene_polygons,
+            )
+
+        # Count direction on the newest-frame snapshot.
+        result = LaneCount(vehicles=[])
+        for track in last_active:
+            self._assign_direction_to_track(track, axis_unit, motion_threshold, tracker)
+
+            if track.direction == "LS_to_SA":
+                result.LS_to_SA += 1
+                self._add_class_to_breakdown(result, track.class_name, "LS_to_SA")
+            elif track.direction == "SA_to_LS":
+                result.SA_to_LS += 1
+                self._add_class_to_breakdown(result, track.class_name, "SA_to_LS")
+            else:
+                result.unassigned += 1
+
+            result.vehicles.append({
+                "bbox": list(track.bbox),
+                "center": list(track.center),
+                "confidence": round(track.confidence, 3),
+                "class": track.class_name,
+                "lane": track.direction or "unassigned",
+                "track_id": track.track_id,
+                "direction_source": track.direction_source,
+                "speed_along_axis_px_per_sec": round(track.speed_along_axis, 2),
+                "speed_px_per_sec": round(track.speed_px_per_sec, 2),
+                "entry_edge": track.entry_edge,
+                "stationary": track.direction_source != "motion",
+            })
+
+        result.total = len(last_active)
+
+        if result.total > 0:
+            unassigned_ratio = result.unassigned / result.total
+            threshold = self.config["detection_settings"]["unassigned_threshold"]
+            if unassigned_ratio > threshold:
+                result.direction_uncertain = True
+                logger.warning(
+                    f"⚠️ Direction uncertain: {unassigned_ratio:.1%} unassigned "
+                    f"> {threshold:.0%} threshold"
+                )
+
+        n_motion = sum(1 for t in last_active if t.direction_source == "motion")
+        n_entry  = sum(1 for t in last_active if t.direction_source == "entry")
+        logger.info(
+            f"✅ BURST RESULT: SA→LS={result.SA_to_LS}, LS→SA={result.LS_to_SA}, "
+            f"unassigned={result.unassigned}, total={result.total} "
+            f"(by motion: {n_motion}, by entry-edge: {n_entry})"
+        )
+
+        # Attach speed + transit-time metrics as a flow_metrics dict on the
+        # vehicles list. The LaneCount dataclass itself stays back-compat;
+        # extras ride on the response via to_dict() in the endpoint.
+        ppm = runtime.get("pixels_per_meter")
+        flow_metrics = self._compute_flow_metrics(
+            last_active, axis_unit, motion_threshold, ppm, camera_view
+        )
+        # Store on the result via a stash attribute the endpoint will pick up.
+        result.flow_metrics = flow_metrics  # type: ignore[attr-defined]
+        return result
+
+    def _compute_flow_metrics(
+        self,
+        tracks: List[Track],
+        axis_unit: Tuple[float, float],
+        motion_threshold: float,
+        pixels_per_meter: Optional[float],
+        camera_view: str,
+    ) -> Dict[str, Any]:
+        """
+        Aggregate per-track speeds into directional means and transit-time
+        estimates. Returns a dict suitable for direct JSON serialization.
+        """
+        ls_speeds = [t.speed_along_axis for t in tracks
+                     if t.direction == "LS_to_SA" and t.direction_source == "motion"]
+        sa_speeds = [t.speed_along_axis for t in tracks
+                     if t.direction == "SA_to_LS" and t.direction_source == "motion"]
+
+        def avg(xs):
+            return (sum(xs) / len(xs)) if xs else 0.0
+
+        ls_mean_px = avg(ls_speeds)  # signed positive for LS→SA
+        # SA→LS speeds project negative onto the axis; use absolute value.
+        sa_mean_px = avg([abs(v) for v in sa_speeds])
+
+        ls_kmh = sa_kmh = None
+        ls_transit_s = sa_transit_s = None
+        if pixels_per_meter and pixels_per_meter > 0:
+            mps_per_px = 1.0 / pixels_per_meter
+            ls_mps = ls_mean_px * mps_per_px
+            sa_mps = sa_mean_px * mps_per_px
+            if ls_mps > 0:
+                ls_kmh = round(ls_mps * 3.6, 1)
+            if sa_mps > 0:
+                sa_kmh = round(sa_mps * 3.6, 1)
+
+            # Free-flow transit time across the segment whose length the
+            # caller pre-configured under flow_axis. For bridge/canopy/engen
+            # we treat the configured ~50m as the segment length.
+            segment_m = 50.0
+            view_cfg = self.config["camera_views"].get(camera_view, {})
+            segment_m = float(view_cfg.get("segment_length_m", segment_m))
+            if ls_mps > 0:
+                ls_transit_s = round(segment_m / ls_mps, 1)
+            if sa_mps > 0:
+                sa_transit_s = round(segment_m / sa_mps, 1)
+
+        ls_moving = len(ls_speeds)
+        sa_moving = len(sa_speeds)
+        return {
+            "pixels_per_meter": pixels_per_meter,
+            "LS_to_SA": {
+                "moving_count": ls_moving,
+                "mean_speed_kmh": ls_kmh,
+                "free_flow_transit_seconds": ls_transit_s,
+            },
+            "SA_to_LS": {
+                "moving_count": sa_moving,
+                "mean_speed_kmh": sa_kmh,
+                "free_flow_transit_seconds": sa_transit_s,
+            },
+        }
+
     def update_lane_polygon(self, camera_view: str, lane_name: str, polygon: List[List[int]]):
         """Update a lane polygon in the configuration."""
         if camera_view not in self.config["camera_views"]:

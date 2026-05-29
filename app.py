@@ -93,6 +93,30 @@ class MultiAnalyzeResponse(BaseModel):
     message: Optional[str] = None
 
 
+class BurstFrame(BaseModel):
+    image: str
+    timestamp_ms: int
+
+
+class BurstAnalyzeRequest(BaseModel):
+    """A burst of consecutive frames (oldest first) from one camera view."""
+    frames: List[BurstFrame]
+    camera_view: str = "bridge"
+
+
+class BurstAnalyzeResponse(BaseModel):
+    success: bool
+    SA_to_LS: int
+    LS_to_SA: int
+    unassigned: int
+    total: int
+    direction_uncertain: bool
+    message: Optional[str] = None
+    vehicles: Optional[List[Dict]] = None
+    breakdown: Optional[Dict] = None
+    flow_metrics: Optional[Dict] = None
+
+
 class DebugRequest(BaseModel):
     image: str
     camera_view: str = "bridge"
@@ -234,6 +258,50 @@ async def analyze_multiple_frames(request: MultiAnalyzeRequest):
         )
     except Exception as e:
         logger.error(f"Multi-analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/analyze-burst", response_model=BurstAnalyzeResponse)
+async def analyze_burst(request: BurstAnalyzeRequest):
+    """
+    Analyze a burst of consecutive frames (oldest first, ~1s apart).
+
+    Direction per vehicle is derived from the motion vector projected onto the
+    configured flow axis when speed >= motion_threshold_px_per_sec; otherwise
+    from the entry-zone direction prior tagged when the track was first seen.
+
+    Tracker state persists per camera_view across calls so vehicles parked in
+    a queue across multiple capture cycles retain their direction.
+    """
+    try:
+        detector = get_detector()
+
+        # Convert Pydantic frames to plain dicts the detector expects.
+        frames = [{"image": f.image, "timestamp_ms": f.timestamp_ms}
+                  for f in request.frames]
+
+        result = detector.analyze_burst(frames, request.camera_view)
+
+        message = None
+        if result.direction_uncertain:
+            message = "Direction uncertain — reporting total vehicles only"
+
+        return BurstAnalyzeResponse(
+            success=True,
+            SA_to_LS=result.SA_to_LS,
+            LS_to_SA=result.LS_to_SA,
+            unassigned=result.unassigned,
+            total=result.total,
+            direction_uncertain=result.direction_uncertain,
+            message=message,
+            vehicles=result.vehicles,
+            breakdown=result.to_dict().get("breakdown"),
+            flow_metrics=getattr(result, "flow_metrics", None),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Burst analysis failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
