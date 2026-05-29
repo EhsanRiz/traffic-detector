@@ -296,16 +296,22 @@ class VelocityTracker:
         used_ids: set = set()
         active: List[Track] = []
 
+        # When scene_polygons is empty we treat the view as indicator-only
+        # (engen) and skip the off-scene drop entirely — all detected vehicles
+        # are kept and counted.
+        scene_filter_active = bool(scene_polygons)
+
         for det in detections:
             center_pt = Point(det.center)
 
-            # Off-scene filter: vehicle must be inside a lane polygon or an
-            # entry zone to be tracked at all. Keeps us from chasing cars on
-            # the riverside road, embankment, etc.
-            on_scene = any(p.contains(center_pt) for p in scene_polygons)
-            in_entry = any(z["polygon"].contains(center_pt) for z in entry_zones)
-            if not on_scene and not in_entry:
-                continue
+            if scene_filter_active:
+                # Vehicle must be inside a lane polygon or an entry zone to
+                # be tracked. Keeps us from chasing cars on the riverside
+                # road, embankment, etc.
+                on_scene = any(p.contains(center_pt) for p in scene_polygons)
+                in_entry = any(z["polygon"].contains(center_pt) for z in entry_zones)
+                if not on_scene and not in_entry:
+                    continue
 
             tid = self._match(det.bbox, det.center, used_ids)
             if tid is not None:
@@ -975,11 +981,17 @@ class LaneDetector:
 
         # Scene mask = union of all configured lane polygons. Vehicles whose
         # center is outside this AND outside every entry zone are dropped
-        # (off-scene — riverside road, embankment, etc.).
+        # (off-scene — riverside road, embankment, etc.). For views marked
+        # use_as_indicator_only (engen) we deliberately leave it empty so
+        # every detected vehicle counts — direction-by-polygon doesn't apply
+        # at that distance and the polygon was too narrow for the looser
+        # detection thresholds used there.
         scene_polygons: List[Polygon] = []
-        for lane_data in view.get("lanes", {}).values():
-            scaled = [(int(x * sx), int(y * sy)) for x, y in lane_data["polygon"]]
-            scene_polygons.append(Polygon(scaled))
+        indicator_only = bool(view.get("use_as_indicator_only", False))
+        if not indicator_only:
+            for lane_data in view.get("lanes", {}).values():
+                scaled = [(int(x * sx), int(y * sy)) for x, y in lane_data["polygon"]]
+                scene_polygons.append(Polygon(scaled))
 
         return {
             "axis_unit": axis_unit,
