@@ -15,22 +15,24 @@
       "entry_zones": [
         {
           "name": "top_LS_end",
-          "description": "Top of frame near Maseru border — vehicles entering here came FROM the LS canopy heading TO SA.",
+          "description": "Top of frame near Maseru border — entry for LS_to_SA / exit for SA_to_LS.",
           "polygon": [[400, 0], [800, 0], [800, 30], [400, 30]],
-          "direction": "LS_to_SA"
+          "direction": "LS_to_SA",
+          "exit_for": "SA_to_LS"
         },
         {
           "name": "bottom_SA_end",
-          "description": "Bottom of frame off the bridge — vehicles entering here came FROM SA heading TO LS.",
+          "description": "Bottom of frame off the bridge — entry for SA_to_LS / exit for LS_to_SA.",
           "polygon": [[250, 420], [700, 420], [700, 450], [250, 450]],
-          "direction": "SA_to_LS"
+          "direction": "SA_to_LS",
+          "exit_for": "LS_to_SA"
         }
       ],
       "motion_threshold_px_per_sec": 5.0,
       "pixels_per_meter": 10.3,
       "segment_length_m": 50.0,
       "queue_seconds_per_vehicle": 30.0,
-      "track_max_age_seconds": 300,
+      "track_max_age_seconds": 3600,
       "lanes": {
         "SA_to_LS": {
           "description": "Lane next to orange pole (right side of image) - vehicles coming FROM South Africa",
@@ -101,22 +103,24 @@
       "entry_zones": [
         {
           "name": "from_LS_road",
-          "description": "Bottom/left edge — vehicles entering from LS roads heading to bridge.",
+          "description": "Bottom/left edge — entry for LS_to_SA / exit for SA_to_LS departures.",
           "polygon": [[0, 380], [400, 380], [400, 450], [0, 450]],
-          "direction": "LS_to_SA"
+          "direction": "LS_to_SA",
+          "exit_for": "SA_to_LS"
         },
         {
           "name": "from_bridge",
-          "description": "Right edge — vehicles just came off the bridge from SA.",
+          "description": "Right edge — entry for SA_to_LS arrivals / exit for LS_to_SA departures toward bridge.",
           "polygon": [[720, 0], [800, 0], [800, 300], [720, 300]],
-          "direction": "SA_to_LS"
+          "direction": "SA_to_LS",
+          "exit_for": "LS_to_SA"
         }
       ],
       "motion_threshold_px_per_sec": 3.0,
       "pixels_per_meter": 8.0,
       "segment_length_m": 50.0,
       "queue_seconds_per_vehicle": 45.0,
-      "track_max_age_seconds": 900,
+      "track_max_age_seconds": 5400,
       "lanes": {
         "SA_to_LS": {
           "description": "Left side under green roof - SA vehicles queuing to enter Lesotho (1-2 rows when busy)",
@@ -191,13 +195,19 @@
           "description": "Far end of queue — vehicles joining the queue from Maseru.",
           "polygon": [[260, 90], [380, 110], [380, 160], [260, 140]],
           "direction": "LS_to_SA"
+        },
+        {
+          "name": "border_exit",
+          "description": "Near end of approach (just before canopy) — exit-only for LS_to_SA travelers.",
+          "polygon": [[600, 280], [720, 320], [720, 360], [600, 320]],
+          "exit_for": "LS_to_SA"
         }
       ],
       "motion_threshold_px_per_sec": 4.0,
       "pixels_per_meter": 8.0,
       "segment_length_m": 50.0,
       "queue_seconds_per_vehicle": 25.0,
-      "track_max_age_seconds": 600,
+      "track_max_age_seconds": 3600,
       "lanes": {
         "LS_to_SA": {
           "description": "Main road queue area - cars heading to SA (narrow strip following road)",

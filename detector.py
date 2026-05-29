@@ -176,7 +176,7 @@ class Track:
     center: Tuple[int, int]
     class_name: str
     confidence: float
-    first_seen_ts: float                  # seconds since epoch
+    first_seen_ts: float                  # seconds since epoch — anchors transit time
     last_seen_ts: float
     bbox_history: List[Tuple[float, Tuple[int, int, int, int]]] = field(default_factory=list)
     entry_edge: Optional[str] = None      # zone name where the track first appeared
@@ -185,6 +185,10 @@ class Track:
     direction_source: str = "unassigned"  # 'motion' | 'entry' | 'unassigned'
     speed_along_axis: float = 0.0         # signed px/s along the flow axis
     speed_px_per_sec: float = 0.0         # |velocity| magnitude
+    # Set when this track is observed crossing the exit zone matching its
+    # entry_direction. Locks transit time = finished_at_ts - first_seen_ts.
+    finished_at_ts: Optional[float] = None
+    elapsed_seconds: Optional[float] = None
 
 
 class VelocityTracker:
@@ -203,14 +207,19 @@ class VelocityTracker:
         history_size: int = 8,
     ):
         self.iou_threshold = iou_match_threshold
-        # Fallback when IoU < threshold (e.g. fast-moving vehicle whose bbox in
-        # the next frame doesn't overlap with the prior — at 1 Hz burst a car
-        # at 50 km/h moves ~140 px on the bridge, well past any IoU match).
         self.max_centroid_distance_px = max_centroid_distance_px
         self.max_age_seconds = max_age_seconds
         self.history_size = history_size
         self._tracks: Dict[int, Track] = {}
         self._next_id: int = 1
+        # Rolling buffer of completed transit times per direction. Each entry
+        # is (finished_ts, elapsed_seconds). Used to compute observed wait
+        # time as the trimmed mean over a recent window.
+        from collections import deque
+        self._completed: Dict[str, "deque"] = {
+            "LS_to_SA": deque(maxlen=200),
+            "SA_to_LS": deque(maxlen=200),
+        }
 
     @staticmethod
     def _iou(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> float:
@@ -271,6 +280,7 @@ class VelocityTracker:
         timestamp_s: float,
         entry_zones: List[Dict[str, Any]],
         scene_polygons: List[Polygon],
+        exit_zones: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Track]:
         """
         Update the tracker with detections from a single frame.
@@ -338,7 +348,61 @@ class VelocityTracker:
                 used_ids.add(new_id)
                 active.append(new_track)
 
+        # Exit-zone check: if this track has an entry_direction, isn't already
+        # finished, and its center is now inside an exit zone whose `exit_for`
+        # matches its entry_direction → lock in measured transit time.
+        if exit_zones:
+            for t in active:
+                if t.finished_at_ts is not None or not t.entry_direction:
+                    continue
+                # Tiny grace period to avoid flagging the brand-new track as
+                # finished while it's still inside the entry zone.
+                if (t.last_seen_ts - t.first_seen_ts) < 1.0:
+                    continue
+                pt = Point(t.center)
+                for zone in exit_zones:
+                    if zone.get("exit_for") != t.entry_direction:
+                        continue
+                    if zone["polygon"].contains(pt):
+                        elapsed = t.last_seen_ts - t.first_seen_ts
+                        t.finished_at_ts = t.last_seen_ts
+                        t.elapsed_seconds = elapsed
+                        self._completed[t.entry_direction].append(
+                            (t.last_seen_ts, elapsed)
+                        )
+                        logger.info(
+                            f"⏱  MEASURED transit: {t.entry_direction} track #{t.track_id} = {elapsed:.1f}s "
+                            f"(buffer now {len(self._completed[t.entry_direction])})"
+                        )
+                        break
+
         return active
+
+    def get_observed_wait_seconds(
+        self,
+        direction: str,
+        window_seconds: float = 3600.0,
+        min_samples: int = 3,
+    ) -> Optional[Tuple[float, int]]:
+        """
+        Returns (mean_elapsed_seconds, sample_count) for completed transits in
+        the last `window_seconds`, or None if too few samples. Uses a trimmed
+        mean (drop top/bottom 10%) to handle outliers from misidentified tracks.
+        """
+        buf = self._completed.get(direction)
+        if not buf:
+            return None
+        now = time.time()
+        recent = [el for (ts, el) in buf if now - ts <= window_seconds]
+        if len(recent) < min_samples:
+            return None
+        recent.sort()
+        n = len(recent)
+        # Trim top/bottom 10% (at least 1 if n >= 10).
+        trim = max(0, n // 10)
+        trimmed = recent[trim: n - trim] if trim > 0 else recent
+        mean = sum(trimmed) / len(trimmed)
+        return mean, n
 
     def compute_velocity(self, track: Track) -> Tuple[float, float]:
         """Average velocity in px/s from oldest→newest bbox in history."""
@@ -864,15 +928,29 @@ class LaneDetector:
             # Default: down the image (works as a no-op when unconfigured).
             axis_unit = (0.0, 1.0)
 
-        # Entry zones (each {name, polygon (Shapely), direction}).
+        # Entry zones (tag direction prior when track first appears).
+        # Exit zones (mark transit complete when an entered track crosses one
+        # matching its entry_direction). The two zone sets are derived from
+        # the same lane_config entries — a zone can be entry for direction A
+        # AND exit for direction B (typical for bridge ends), or pure exit
+        # (e.g. engen border_exit which only has `exit_for`).
         entry_zones: List[Dict[str, Any]] = []
+        exit_zones: List[Dict[str, Any]] = []
         for zone in view.get("entry_zones", []):
             scaled = [(int(x * sx), int(y * sy)) for x, y in zone["polygon"]]
-            entry_zones.append({
-                "name": zone["name"],
-                "polygon": Polygon(scaled),
-                "direction": zone["direction"],
-            })
+            poly = Polygon(scaled)
+            if "direction" in zone:
+                entry_zones.append({
+                    "name": zone["name"],
+                    "polygon": poly,
+                    "direction": zone["direction"],
+                })
+            if "exit_for" in zone:
+                exit_zones.append({
+                    "name": zone["name"],
+                    "polygon": poly,
+                    "exit_for": zone["exit_for"],
+                })
 
         # Scene mask = union of all configured lane polygons. Vehicles whose
         # center is outside this AND outside every entry zone are dropped
@@ -885,6 +963,7 @@ class LaneDetector:
         return {
             "axis_unit": axis_unit,
             "entry_zones": entry_zones,
+            "exit_zones": exit_zones,
             "scene_polygons": scene_polygons,
             "motion_threshold_px_per_sec": float(
                 view.get("motion_threshold_px_per_sec", 5.0)
@@ -965,6 +1044,7 @@ class LaneDetector:
         runtime = self._get_view_runtime(camera_view, actual_width, actual_height)
         axis_unit = runtime["axis_unit"]
         entry_zones = runtime["entry_zones"]
+        exit_zones = runtime["exit_zones"]
         scene_polygons = runtime["scene_polygons"]
         motion_threshold = runtime["motion_threshold_px_per_sec"]
 
@@ -988,6 +1068,7 @@ class LaneDetector:
                 timestamp_s=timestamp_s,
                 entry_zones=entry_zones,
                 scene_polygons=scene_polygons,
+                exit_zones=exit_zones,
             )
 
         # Count direction on the newest-frame snapshot.
@@ -1043,7 +1124,7 @@ class LaneDetector:
         # extras ride on the response via to_dict() in the endpoint.
         ppm = runtime.get("pixels_per_meter")
         flow_metrics = self._compute_flow_metrics(
-            last_active, axis_unit, motion_threshold, ppm, camera_view
+            last_active, axis_unit, motion_threshold, ppm, camera_view, tracker
         )
         # Store on the result via a stash attribute the endpoint will pick up.
         result.flow_metrics = flow_metrics  # type: ignore[attr-defined]
@@ -1056,6 +1137,7 @@ class LaneDetector:
         motion_threshold: float,
         pixels_per_meter: Optional[float],
         camera_view: str,
+        tracker: Optional["VelocityTracker"] = None,
     ) -> Dict[str, Any]:
         """
         Aggregate per-track speeds into directional means and transit-time
@@ -1115,6 +1197,19 @@ class LaneDetector:
         ls_wait_s = estimate_seconds(ls_total, ls_transit_s)
         sa_wait_s = estimate_seconds(sa_total, sa_transit_s)
 
+        # Measured wait time from tag-in / tag-out tracking. None if too few
+        # completed transits in the rolling window.
+        ls_observed = sa_observed = None
+        if tracker is not None:
+            ls_observed = tracker.get_observed_wait_seconds("LS_to_SA")
+            sa_observed = tracker.get_observed_wait_seconds("SA_to_LS")
+
+        def _obs(o):
+            if not o:
+                return {"seconds": None, "sample_count": 0}
+            mean_s, n = o
+            return {"seconds": round(mean_s, 1), "sample_count": n}
+
         return {
             "pixels_per_meter": pixels_per_meter,
             "segment_length_m": segment_m,
@@ -1126,6 +1221,7 @@ class LaneDetector:
                 "mean_speed_kmh": ls_kmh,
                 "free_flow_transit_seconds": ls_transit_s,
                 "estimated_wait_seconds": ls_wait_s,
+                "observed_wait": _obs(ls_observed),
             },
             "SA_to_LS": {
                 "moving_count": len(sa_speeds),
@@ -1134,6 +1230,7 @@ class LaneDetector:
                 "mean_speed_kmh": sa_kmh,
                 "free_flow_transit_seconds": sa_transit_s,
                 "estimated_wait_seconds": sa_wait_s,
+                "observed_wait": _obs(sa_observed),
             },
         }
 
